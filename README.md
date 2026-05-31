@@ -148,7 +148,7 @@ restores from `*.bak` before every re-patch. **No Administrator / sudo needed.**
 ```
 
 ```powershell
-# Windows (not yet verified):
+# Windows (verified):
 powershell -ExecutionPolicy Bypass -File .\patch-claude-code-vscode.ps1
 powershell -ExecutionPolicy Bypass -File .\patch-claude-code-vscode.ps1 -Action Restore
 ```
