@@ -230,9 +230,11 @@ function Install-AutoUpdateTask {
 		$action = New-ScheduledTaskAction -Execute 'powershell.exe' `
 			-Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$script:WatcherPs1`""
 		$atLogon = New-ScheduledTaskTrigger -AtLogOn -User $user
-		# Catch a mid-session update without a logon: every 3 hours, forever.
+		# Catch a mid-session update without a logon: every 3 hours, effectively
+		# forever. [TimeSpan]::MaxValue serializes to a duration Task Scheduler
+		# rejects (P99999999...), so use a large but valid finite span.
 		$periodic = New-ScheduledTaskTrigger -Once -At ([DateTime]::Today.AddMinutes(5)) `
-			-RepetitionInterval (New-TimeSpan -Hours 3) -RepetitionDuration ([TimeSpan]::MaxValue)
+			-RepetitionInterval (New-TimeSpan -Hours 3) -RepetitionDuration (New-TimeSpan -Days 3650)
 		$triggers = @($atLogon, $periodic)
 		$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable `
 			-MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
