@@ -1,0 +1,19 @@
+/* Auto-RTL guards for the Claude Code VS Code webview.
+ *
+ * Appended (between sentinel comments) to <ext>/webview/index.css by
+ * patch-claude-code-vscode.sh. Per-paragraph direction is handled by the JS
+ * payload, which stamps dir="auto"; these rules only pin the things that must
+ * stay LTR even when they sit inside an RTL paragraph. Keep this minimal so it
+ * can't fight the webview's own layout. */
+
+/* Code (block and inline) is always logically left-to-right: a Hebrew comment
+ * as the first glyph must not reorder the line. unicode-bidi:normal stops an
+ * RTL ancestor from bleeding into inline <code>. */
+pre,
+code,
+[class*="codeBlock"],
+[class*="CodeBlock"],
+.monaco-editor {
+	direction: ltr;
+	unicode-bidi: normal;
+}
