@@ -5,6 +5,10 @@ extensions to the **official Claude Desktop** — no repackaged installer, no
 rebuild. The same JavaScript extensions run on both platforms; each OS has its
 own patcher.
 
+> Also here: a separate, lightweight patcher that adds **automatic Hebrew RTL to
+> the Claude Code VS Code extension** — see
+> [Claude Code in VS Code](#claude-code-in-vs-code-auto-rtl).
+
 ```powershell
 # Windows (run elevated, from an unzipped release or this repo root):
 powershell -ExecutionPolicy Bypass -File .\patch-claude-windows.ps1
@@ -127,6 +131,44 @@ refresh, and new-window are the verified extensions.
 *library validation*, ad-hoc re-signing may not be enough and the app could
 refuse to launch — in that case restore with `--restore` and report it.
 
+## Claude Code in VS Code (auto-RTL)
+
+A separate, much lighter patcher adds **automatic Hebrew RTL** to the **Claude
+Code VS Code extension** (the sidebar chat). Its UI is a plain webview
+(`<ext>/webview/index.js` + `index.css`) — no asar, no integrity hash, no
+code-signing, and the files are owned by you — so the patcher just appends two
+payloads (`src/vscode-rtl-inject.js` / `.css`) between sentinel comments and
+restores from `*.bak` before every re-patch. **No Administrator / sudo needed.**
+
+```bash
+# macOS (verified):
+./patch-claude-code-vscode.sh                  # install (prompts first)
+./patch-claude-code-vscode.sh --restore        # revert
+./patch-claude-code-vscode.sh --no-auto-update # skip the re-patch LaunchAgent
+```
+
+```powershell
+# Windows (verified):
+powershell -ExecutionPolicy Bypass -File .\patch-claude-code-vscode.ps1
+powershell -ExecutionPolicy Bypass -File .\patch-claude-code-vscode.ps1 -Action Restore
+```
+
+After any (re)patch, reload the webview once: VS Code command palette →
+**"Developer: Reload Window"** (or restart VS Code).
+
+**How the RTL works:** rather than `dir="auto"` (which the browser re-evaluates
+live, so paragraphs flicker left/right while a response streams), the injected JS
+decides each text block's direction from its first strong character and pins
+`dir="rtl"`/`"ltr"` **stickily** — once decided, a paragraph never flips again.
+Hebrew settles RTL on its first Hebrew glyph; English and code stay LTR. It needs
+no knowledge of the webview's hashed class names, so it survives extension updates.
+
+**Stays applied across updates:** the extension auto-updates into a fresh,
+versioned folder that wipes the patch, so a launchd LaunchAgent (macOS) /
+Scheduled Task (Windows) re-applies it automatically — on by default
+(`--no-auto-update` / `-NoAutoUpdate` to skip). You still reload the window once
+after an automatic re-patch.
+
 ## Repository layout
 
 ```
@@ -134,12 +176,15 @@ patch-claude-windows.ps1     Windows patcher (Install / Restore / auto-update)
 package-windows.ps1          builds the Windows ZIP under dist\
 patch-claude-macos.sh        macOS patcher (install / --restore / auto-update)
 package-macos.sh             builds the macOS tar.gz under dist/
+patch-claude-code-vscode.sh  Claude Code VS Code auto-RTL patcher (macOS)
+patch-claude-code-vscode.ps1 Claude Code VS Code auto-RTL patcher (Windows)
 src/
   win-entry.js / win-wrapper.js   Windows entry + web-contents hook
   mac-entry.js / mac-wrapper.js   macOS entry + web-contents hook
   rtl-support.js             RTL CSS/JS (shared, origin: claude-desktop-linux)
   translate-support.js       translate-to-Hebrew (main-process; shared)
   multi-instance-support.js  floating "new window" button (shared)
+  vscode-rtl-inject.js / .css  auto-RTL webview payloads (Claude Code VS Code)
 ```
 
 ## Building a release archive

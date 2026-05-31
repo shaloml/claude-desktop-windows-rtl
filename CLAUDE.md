@@ -22,6 +22,23 @@ non-trivial changes.
   downloads, so a patched app won't auto-update. `asar pack` MUST pass
   `--unpack "{*.node,spawn-helper}"` or the native modules get packed into the
   asar and the app crashes at startup.
+- **Claude Code (VS Code extension):** `patch-claude-code-vscode.sh` (macOS) +
+  `patch-claude-code-vscode.ps1` (Windows), both feeding the shared
+  `src/vscode-rtl-inject.{js,css}` payloads. Verified on macOS. A different, far
+  lighter target than Claude Desktop: the extension's sidebar is a plain webview
+  (`<ext>/webview/index.js` + `index.css`) — no asar, no integrity hash, no
+  code-signing, user-owned files. The patcher just appends the two payloads
+  between sentinel comments and restores from `*.bak` before each re-patch (same
+  idempotency model as the others). RTL here is **automatic, no toggle**: the JS
+  computes each text block's direction from its first strong character and pins
+  `dir="rtl"`/`"ltr"` **stickily** (locks per element, never re-evaluates). Do NOT
+  use `dir="auto"` — the browser re-evaluates it live, so while a response streams
+  the first strong char keeps changing and paragraphs oscillate left/right
+  (eye-searing flicker). A launchd LaunchAgent (macOS) / Scheduled Task (Windows)
+  re-applies after the extension auto-updates into a fresh versioned folder; the
+  watcher is on by default (pass `--no-auto-update` / `-NoAutoUpdate` to skip).
+  After any (re)patch the webview must be reloaded once: VS Code "Developer:
+  Reload Window".
 - **Shared (both):** `rtl-support.js`, `translate-support.js`,
   `multi-instance-support.js`, and the in-process "new window" approach. Fix a
   platform quirk in the platform `*-wrapper.js`, never in the shared modules.
