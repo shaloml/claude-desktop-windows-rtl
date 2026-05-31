@@ -1,8 +1,23 @@
-# Claude Desktop — Windows RTL & extensions patch — dev notes
+# Claude Desktop — Windows & macOS RTL & extensions patch — dev notes
 
-In-place PowerShell patcher that injects RTL + extensions into the **official
-Windows Claude Desktop** (Microsoft Store / MSIX build). Read this before making
+In-place patchers that inject RTL + extensions into the **official Claude
+Desktop**: Windows (Microsoft Store / MSIX build) via PowerShell, and macOS
+(`/Applications/Claude.app`) via a bash script. Read this before making
 non-trivial changes.
+
+## Platforms
+
+- **Windows:** `patch-claude-windows.ps1` + `src/win-entry.js` / `win-wrapper.js`.
+  Verified working.
+- **macOS:** `patch-claude-macos.sh` + `src/mac-entry.js` / `mac-wrapper.js`.
+  First-draft port — NOT yet verified on a real Mac. Differences from Windows:
+  `sudo` instead of takeown/icacls; asar integrity updated in `Info.plist`
+  (`ElectronAsarIntegrity`) instead of byte-replacing a binary; `codesign
+  --force --deep --sign -` (ad-hoc) + `xattr -dr com.apple.quarantine` instead
+  of a self-signed cert; launchd LaunchAgent instead of a Scheduled Task.
+- **Shared (both):** `rtl-support.js`, `translate-support.js`,
+  `multi-instance-support.js`, and the in-process "new window" approach. Fix a
+  platform quirk in the platform `*-wrapper.js`, never in the shared modules.
 
 ## Commit & attribution policy
 
