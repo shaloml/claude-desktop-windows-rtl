@@ -59,14 +59,27 @@ function openNewWindow() {
 			try { session = src.webContents.session; } catch {}
 		}
 
-		const win = new BrowserWindow({
+		// Cascade off the source window so the new one doesn't land exactly on
+		// top of it. A standard (framed) title bar is used instead of
+		// 'hiddenInset': claude.ai's web page defines no -webkit-app-region drag
+		// strip, so a frameless/inset window has nothing to grab and can't be
+		// moved (only minimized/resized). A normal title bar is draggable.
+		const opts = {
 			width: 1280,
 			height: 860,
 			show: false,
 			title: 'Claude',
-			titleBarStyle: 'hiddenInset', // match macOS Claude's inset traffic lights
 			webPreferences: session ? { session } : {},
-		});
+		};
+		try {
+			if (src && !src.isDestroyed()) {
+				const b = src.getBounds();
+				opts.x = b.x + 36;
+				opts.y = b.y + 36;
+			}
+		} catch {}
+
+		const win = new BrowserWindow(opts);
 		win.once('ready-to-show', () => win.show());
 		win.loadURL(url);
 		console.log('[Multi-Window] opened new in-process window ->', url);
