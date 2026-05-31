@@ -27,8 +27,15 @@
 param(
 	[ValidateSet('Install', 'Restore')]
 	[string]$Action = 'Install',
-	[string]$SourceDir
+	[string]$SourceDir,
+	# Internal: the non-elevated session's PATH, forwarded across the UAC
+	# boundary so the elevated run can locate a per-user Node (nvm/winget/scoop).
+	# Env vars don't survive RunAs, so this is passed as a parameter.
+	[string]$UserPath
 )
+
+# Make the forwarded user PATH available to Get-NodeCandidateDirs.
+if ($UserPath) { $env:CLAUDE_USER_PATH = $UserPath }
 
 $ErrorActionPreference = 'Stop'
 
@@ -50,9 +57,14 @@ $isAdmin = ([Security.Principal.WindowsPrincipal] `
 ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
 	Write-Host 'Requesting Administrator privileges...' -ForegroundColor Yellow
+	# Elevation rebuilds PATH from the registry and loses per-user entries (where
+	# nvm/winget/scoop Node usually live). Forward THIS (non-elevated) session's
+	# PATH to the elevated child as a parameter (env vars don't survive RunAs) so
+	# it can still find a user-level Node. See Get-NodeCandidateDirs.
 	$argList = @(
 		'-NoProfile', '-ExecutionPolicy', 'Bypass',
-		'-File', $PSCommandPath, '-Action', $Action
+		'-File', $PSCommandPath, '-Action', $Action,
+		'-UserPath', $env:PATH
 	)
 	if ($SourceDir) { $argList += @('-SourceDir', $SourceDir) }
 	Start-Process powershell.exe -Verb RunAs -ArgumentList $argList
@@ -281,17 +293,72 @@ function Resolve-SourceFiles {
 
 # -----------------------------------------------------------------------------
 # Ensure Node/npx can run @electron/asar
+#
+# Self-elevation rebuilds PATH from the registry, which DROPS user-level PATH
+# entries — so a Node installed per-user (nvm4w / winget / scoop / the official
+# user installer) is invisible to the elevated process even though it works in a
+# normal shell. We therefore probe a broad set of candidate dirs, prepend the
+# first that can actually run the asar tool, and only then give up.
 # -----------------------------------------------------------------------------
-function Assert-NodeToolchain {
-	cmd.exe /c "npx --yes $($script:AsarPackage) --version >nul 2>&1"
-	if ($LASTEXITCODE -eq 0) { return }
-	$sysNode = Join-Path $env:ProgramFiles 'nodejs'
-	if ((Test-Path (Join-Path $sysNode 'node.exe')) -and (Test-Path (Join-Path $sysNode 'npx.cmd'))) {
-		$env:PATH = "$sysNode;$env:PATH"
-		cmd.exe /c "npx --yes $($script:AsarPackage) --version >nul 2>&1"
-		if ($LASTEXITCODE -eq 0) { return }
+function Test-NpxRunsAsar {
+	$out = cmd.exe /c "npx --yes $($script:AsarPackage) --version 2>&1"
+	return @{ Ok = ($LASTEXITCODE -eq 0); Output = ($out | Out-String).Trim() }
+}
+
+function Get-NodeCandidateDirs {
+	$dirs = New-Object System.Collections.Generic.List[string]
+	$add = { param($p) if ($p -and (Test-Path (Join-Path $p 'node.exe'))) { $dirs.Add($p) } }
+
+	# Standard machine + user install locations.
+	& $add (Join-Path $env:ProgramFiles 'nodejs')
+	& $add (Join-Path ${env:ProgramFiles(x86)} 'nodejs')
+	& $add (Join-Path $env:LOCALAPPDATA 'nodejs')
+
+	# nvm-windows: NVM_SYMLINK points at the active version; also scan its store.
+	& $add $env:NVM_SYMLINK
+	foreach ($base in @($env:NVM_HOME, 'C:\nvm4w\nodejs', (Join-Path $env:APPDATA 'nvm'))) {
+		if ($base -and (Test-Path $base)) {
+			& $add $base
+			Get-ChildItem $base -Directory -Filter 'v*' -ErrorAction SilentlyContinue |
+				ForEach-Object { & $add $_.FullName }
+		}
 	}
-	throw "Node.js >= $($script:MinNodeVersion) with npx is required (could not run $($script:AsarPackage))."
+
+	# scoop (current user) and a couple of winget link dirs.
+	& $add (Join-Path $env:USERPROFILE 'scoop\apps\nodejs\current')
+	& $add (Join-Path $env:USERPROFILE 'scoop\apps\nodejs-lts\current')
+
+	# The invoking (non-elevated) user's own PATH, passed in via env if available,
+	# plus the elevated PATH — split and keep any dir that has node.exe.
+	foreach ($pathVar in @($env:CLAUDE_USER_PATH, $env:PATH)) {
+		if ($pathVar) { $pathVar.Split(';') | ForEach-Object { & $add $_.Trim() } }
+	}
+
+	return ($dirs | Select-Object -Unique)
+}
+
+function Assert-NodeToolchain {
+	$probe = Test-NpxRunsAsar
+	if ($probe.Ok) { return }
+
+	foreach ($dir in (Get-NodeCandidateDirs)) {
+		Write-Log "Trying Node at $dir"
+		$env:PATH = "$dir;$env:PATH"
+		$probe = Test-NpxRunsAsar
+		if ($probe.Ok) { Write-Ok "Using Node from $dir"; return }
+	}
+
+	# Still failing — surface the real npx error and the detected Node version so
+	# the cause (missing Node vs. too-old Node vs. broken npx) is obvious.
+	$nodeVer = (cmd.exe /c "node --version 2>&1" | Out-String).Trim()
+	Write-Warn2 "npx could not run $($script:AsarPackage)."
+	if ($nodeVer) { Write-Warn2 "Detected node: $nodeVer" }
+	if ($probe.Output) { Write-Warn2 "npx said: $($probe.Output)" }
+	throw ("Node.js >= $($script:MinNodeVersion) with npx is required, and none of the " +
+		"detected Node locations could run $($script:AsarPackage). " +
+		"Install Node from https://nodejs.org (LTS), reboot, and re-run. " +
+		"If Node is installed per-user (nvm/winget/scoop), run this patcher from an " +
+		"elevated PowerShell that already has 'node --version' working.")
 }
 
 # =============================================================================
