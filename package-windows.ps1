@@ -8,16 +8,20 @@
     machine needs only Node.js and the MSIX Claude Desktop, no repo checkout.
 
     Output (under .\dist\ by default):
-        claude-windows-patch\        the unpacked bundle
-        claude-windows-patch.zip     the shippable archive
+        claude-desktop-windows-rtl[-vX.Y.Z]\     the unpacked bundle
+        claude-desktop-windows-rtl[-vX.Y.Z].zip  the shippable archive
 .PARAMETER OutDir
     Where to write the bundle. Defaults to .\dist next to this script.
+.PARAMETER Version
+    Optional version (e.g. 1.0.0 or v1.0.0). When set, the bundle/zip names get a
+    -vX.Y.Z suffix so each download is self-identifying.
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File .\package-windows.ps1
+    powershell -ExecutionPolicy Bypass -File .\package-windows.ps1 -Version 1.0.0
 #>
 [CmdletBinding()]
 param(
-	[string]$OutDir
+	[string]$OutDir,
+	[string]$Version
 )
 
 $ErrorActionPreference = 'Stop'
@@ -26,7 +30,17 @@ $scriptDir = $PSScriptRoot
 $srcDir = Join-Path $scriptDir 'src'
 
 if (-not $OutDir) { $OutDir = Join-Path $scriptDir 'dist' }
-$bundleName = 'claude-windows-patch'
+
+# Bundle/zip are named after the project. A version suffix (e.g. -v1.0.0) is
+# added when -Version is supplied so every download is self-identifying. Accepts
+# "1.0.0" or "v1.0.0".
+$projectName = 'claude-desktop-windows-rtl'
+$verSuffix = ''
+if ($Version) {
+	$v = $Version.TrimStart('v', 'V')
+	$verSuffix = "-v$v"
+}
+$bundleName = "$projectName$verSuffix"
 $bundleDir = Join-Path $OutDir $bundleName
 $zipPath = Join-Path $OutDir "$bundleName.zip"
 
