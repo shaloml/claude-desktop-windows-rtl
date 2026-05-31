@@ -26,8 +26,8 @@ powershell -ExecutionPolicy Bypass -File .\patch-claude-windows.ps1
 
 ## Install
 
-1. Download the latest `claude-windows-patch.zip` from Releases (or clone this
-   repo) and unzip it.
+1. Download the latest `claude-desktop-windows-rtl-vX.Y.Z.zip` from Releases (or
+   clone this repo) and unzip it.
 2. Right-click **`Run-Patch.cmd`** → **Run as administrator** (or run the
    PowerShell line above).
 3. Approve the UAC prompt. Claude closes, gets patched, and relaunches.
@@ -76,8 +76,8 @@ src/
 ## Building a release ZIP
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\package-windows.ps1
-# -> dist\claude-windows-patch.zip
+powershell -ExecutionPolicy Bypass -File .\package-windows.ps1 -Version 1.0.0
+# -> dist\claude-desktop-windows-rtl-v1.0.0.zip
 ```
 
 ## Caveats
