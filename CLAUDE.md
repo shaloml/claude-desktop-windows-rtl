@@ -37,7 +37,7 @@ the binaries voids their Authenticode signature). Technique adapted from
 
 ```
 patch-claude-windows.ps1   the patcher (Install / Restore), self-elevates via UAC
-package-windows.ps1        builds dist\claude-windows-patch.zip
+package-windows.ps1        builds dist\claude-desktop-windows-rtl[-vX.Y.Z].zip
 src\
   win-entry.js             package.json "main"; loads the wrapper then the app
   win-wrapper.js           web-contents hook: injection + right-click menu + new window

@@ -12,15 +12,18 @@ vendors copies. Use this to pull newer versions deliberately.
 
 ## Source of truth
 
-Upstream path on this machine: `C:\projects\Local\AI\claude-desktop-linux\scripts\`.
-(`win-entry.js` and `win-wrapper.js` are Windows-only — they live ONLY here and
-are never overwritten by a sync.)
+The upstream modules live in the `scripts/` folder of a local
+`claude-desktop-linux` (a.k.a. `claude-desktop-debian`) checkout. Point the
+`$U` variable below at wherever that checkout sits on your machine — do not
+hard-code an absolute path here. (`win-entry.js` and `win-wrapper.js` are
+Windows-only — they live ONLY in this repo and are never overwritten by a sync.)
 
 ## Procedure
 
-1. Diff before copying so changes are intentional:
+1. Set the upstream scripts dir, then diff before copying so changes are
+   intentional:
    ```bash
-   U=/c/projects/Local/AI/claude-desktop-linux/scripts
+   U="${CLAUDE_LINUX_REPO:-../claude-desktop-linux}/scripts"   # adjust as needed
    for f in rtl-support.js translate-support.js multi-instance-support.js; do
      echo "=== $f ==="; diff -u "src/$f" "$U/$f" || true
    done

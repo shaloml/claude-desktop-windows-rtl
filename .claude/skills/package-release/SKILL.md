@@ -5,14 +5,17 @@ description: Build the distributable ZIP and optionally cut a GitHub release. Us
 
 # Package & release
 
-Produce the self-contained `claude-windows-patch.zip` that installs on machines
-without a repo checkout (needs only Node.js + MSIX Claude Desktop on the target).
+Produce the self-contained `claude-desktop-windows-rtl-vX.Y.Z.zip` that installs
+on machines without a repo checkout (needs only Node.js + MSIX Claude Desktop on
+the target).
 
 ## Build the ZIP
 
+Always pass `-Version` so the bundle/zip names carry the version:
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\package-windows.ps1
-# -> dist\claude-windows-patch.zip  (flat bundle: patcher + 5 JS + INSTALL.txt + Run-Patch.cmd)
+powershell -ExecutionPolicy Bypass -File .\package-windows.ps1 -Version X.Y.Z
+# -> dist\claude-desktop-windows-rtl-vX.Y.Z.zip
+#    (flat bundle: patcher + 5 JS + INSTALL.txt + Run-Patch.cmd)
 ```
 
 `package-windows.ps1` copies the patcher + the five `src/*.js` into a flat folder
@@ -21,18 +24,20 @@ powershell -ExecutionPolicy Bypass -File .\package-windows.ps1
 
 Sanity-check the ZIP before shipping:
 ```bash
-unzip -l dist/claude-windows-patch.zip   # expect 8 entries
+unzip -l dist/claude-desktop-windows-rtl-vX.Y.Z.zip   # expect 8 entries
 ```
 
 ## Cut a GitHub release (only when asked)
 
-Tag, then attach the ZIP so users can download without cloning:
+Tag, then attach the versioned ZIP so users can download without cloning:
 ```bash
-gh release create vX.Y.Z dist/claude-windows-patch.zip \
+gh release create vX.Y.Z dist/claude-desktop-windows-rtl-vX.Y.Z.zip \
   --title "vX.Y.Z" --notes "<summary of changes>"
 ```
-- Use semver; summarize what changed since the last tag.
-- Confirm `gh auth status` first.
+- Use semver; the tag and the `-Version` used to build the ZIP must match.
+- Summarize what changed since the last tag.
+- Confirm `gh auth status` first (install GitHub CLI if missing; `gh` may not be
+  on PATH).
 
 ## Rules
 
