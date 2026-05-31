@@ -1,8 +1,30 @@
-# Claude Desktop — Windows RTL & extensions patch — dev notes
+# Claude Desktop — Windows & macOS RTL & extensions patch — dev notes
 
-In-place PowerShell patcher that injects RTL + extensions into the **official
-Windows Claude Desktop** (Microsoft Store / MSIX build). Read this before making
+In-place patchers that inject RTL + extensions into the **official Claude
+Desktop**: Windows (Microsoft Store / MSIX build) via PowerShell, and macOS
+(`/Applications/Claude.app`) via a bash script. Read this before making
 non-trivial changes.
+
+## Platforms
+
+- **Windows:** `patch-claude-windows.ps1` + `src/win-entry.js` / `win-wrapper.js`.
+  Verified working.
+- **macOS:** `patch-claude-macos.sh` + `src/mac-entry.js` / `mac-wrapper.js`.
+  Verified on macOS 26 (Apple Silicon). Differences from Windows: `sudo` instead
+  of takeown/icacls (skipped when the user owns the bundle); asar integrity
+  updated in `Info.plist` (`ElectronAsarIntegrity`) instead of byte-replacing a
+  binary; `codesign --force --deep --sign -` (ad-hoc) + `xattr -dr
+  com.apple.quarantine` instead of a self-signed cert; launchd LaunchAgent
+  instead of a Scheduled Task. Two verified consequences of the ad-hoc re-sign:
+  (1) the app loses access to the `Claude Safe Storage` keychain key, so the
+  first launch after each patch logs the user out once (re-login then sticks
+  across normal restarts); (2) Claude's Squirrel updater rejects its own
+  downloads, so a patched app won't auto-update. `asar pack` MUST pass
+  `--unpack "{*.node,spawn-helper}"` or the native modules get packed into the
+  asar and the app crashes at startup.
+- **Shared (both):** `rtl-support.js`, `translate-support.js`,
+  `multi-instance-support.js`, and the in-process "new window" approach. Fix a
+  platform quirk in the platform `*-wrapper.js`, never in the shared modules.
 
 ## Commit & attribution policy
 

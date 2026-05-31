@@ -1,13 +1,22 @@
-# Claude Desktop — Windows RTL & extensions patch
+# Claude Desktop — Windows & macOS RTL & extensions patch
 
-In-place PowerShell patcher that adds RTL (Hebrew/Arabic) support and a few
-quality-of-life extensions to the **official Windows Claude Desktop** (the
-Microsoft Store / MSIX build) — no repackaged installer, no rebuild.
+In-place patcher that adds RTL (Hebrew/Arabic) support and a few quality-of-life
+extensions to the **official Claude Desktop** — no repackaged installer, no
+rebuild. The same JavaScript extensions run on both platforms; each OS has its
+own patcher.
 
 ```powershell
-# Run elevated from an unzipped release (or this repo root):
+# Windows (run elevated, from an unzipped release or this repo root):
 powershell -ExecutionPolicy Bypass -File .\patch-claude-windows.ps1
 ```
+
+```bash
+# macOS (from an unpacked release or this repo root):
+./patch-claude-macos.sh
+```
+
+> **macOS is verified** (on macOS 26 / Apple Silicon). One quirk: the first
+> launch after patching logs you out once — see the [macOS](#macos) section.
 
 ## Features
 
@@ -51,7 +60,7 @@ powershell -ExecutionPolicy Bypass -File .\patch-claude-windows.ps1 -Action Rest
 
 Restore also disables auto-re-patch so it won't come back on the next update.
 
-## How it works
+## How it works (Windows)
 
 The MSIX build locks the app files and enforces ASAR integrity, so the patcher:
 
@@ -71,24 +80,80 @@ The MSIX build locks the app files and enforces ASAR integrity, so the patcher:
 Technique adapted from
 [`shraga100/claude-desktop-rtl-patch`](https://github.com/shraga100/claude-desktop-rtl-patch).
 
+## macOS
+
+macOS uses the same JS extensions but a different patcher
+(`patch-claude-macos.sh`), because the app ships as `/Applications/Claude.app`
+rather than an MSIX package. The mechanics differ:
+
+| | Windows (MSIX) | macOS (.app) |
+|---|---|---|
+| file access | `takeown` + `icacls` | `sudo` (no MSIX lock) |
+| asar integrity | byte-replace hash in `claude.exe` | update `ElectronAsarIntegrity` in `Info.plist` |
+| code signing | self-signed cert + Root store | `codesign --force --deep --sign -` (ad-hoc) + clear quarantine |
+| auto-re-patch | Scheduled Task | launchd LaunchAgent |
+
+```bash
+./patch-claude-macos.sh                  # install (prompts for prerequisites)
+./patch-claude-macos.sh --yes            # unattended
+./patch-claude-macos.sh --no-auto-update # skip the auto-re-patch agent
+./patch-claude-macos.sh --restore        # revert to the original app
+```
+
+Requirements: `/Applications/Claude.app`, Node.js 22+ (offered via Homebrew if
+missing), and — only if the app is root-owned — your admin password (the patcher
+re-runs under `sudo` to write inside `/Applications`; if you own the bundle, no
+password is needed). Native modules (`*.node`, node-pty's `spawn-helper`) are
+re-marked as unpacked during repack so the app still loads them.
+
+**One-time re-login (expected):** editing the bundle invalidates Apple's
+signature, so the patcher re-signs ad-hoc. That changes the app's identity, so
+macOS no longer lets it read the `Claude Safe Storage` keychain key that
+encrypts your saved session — the first launch after patching logs you out.
+Sign in once more (click **Always Allow** if macOS prompts for the keychain);
+it then stays logged in across normal restarts. You only re-login again if you
+re-run the patcher.
+
+**No silent auto-update:** the ad-hoc signature also makes Claude's built-in
+updater reject its own downloads, so a patched Claude won't auto-update and wipe
+the patch. To move to a newer Claude: `--restore`, update Claude normally, then
+re-run the patcher.
+
+**Translate to Hebrew** is best-effort on macOS — claude.ai re-renders and tends
+to revert the one-shot translation, so it may not stick. RTL, the version label,
+refresh, and new-window are the verified extensions.
+
+**Gatekeeper caveat:** if a future macOS / app build enforces hardened-runtime
+*library validation*, ad-hoc re-signing may not be enough and the app could
+refuse to launch — in that case restore with `--restore` and report it.
+
 ## Repository layout
 
 ```
-patch-claude-windows.ps1     the in-place patcher (Install / Restore)
-package-windows.ps1          builds the distributable ZIP under dist\
+patch-claude-windows.ps1     Windows patcher (Install / Restore / auto-update)
+package-windows.ps1          builds the Windows ZIP under dist\
+patch-claude-macos.sh        macOS patcher (install / --restore / auto-update)
+package-macos.sh             builds the macOS tar.gz under dist/
 src/
-  win-entry.js               package.json "main"; loads the wrapper then the app
-  win-wrapper.js             web-contents hook: injection + right-click menu
-  rtl-support.js             RTL CSS/JS (shared with the Linux project)
-  translate-support.js       translate-to-Hebrew (main-process)
-  multi-instance-support.js  floating "new window" button
+  win-entry.js / win-wrapper.js   Windows entry + web-contents hook
+  mac-entry.js / mac-wrapper.js   macOS entry + web-contents hook
+  rtl-support.js             RTL CSS/JS (shared, origin: claude-desktop-linux)
+  translate-support.js       translate-to-Hebrew (main-process; shared)
+  multi-instance-support.js  floating "new window" button (shared)
 ```
 
-## Building a release ZIP
+## Building a release archive
 
 ```powershell
+# Windows
 powershell -ExecutionPolicy Bypass -File .\package-windows.ps1 -Version 1.0.0
 # -> dist\claude-desktop-windows-rtl-v1.0.0.zip
+```
+
+```bash
+# macOS
+./package-macos.sh --version 1.0.0
+# -> dist/claude-desktop-macos-rtl-v1.0.0.tar.gz
 ```
 
 ## Caveats
