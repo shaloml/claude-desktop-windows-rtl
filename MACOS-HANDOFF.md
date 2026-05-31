@@ -1,5 +1,22 @@
 # macOS port — handoff for a fresh Claude Code session on the Mac
 
+> **STATUS: VERIFIED on macOS 26 / Apple Silicon (v1.0.0).** The port works —
+> patch applies, app launches, ASAR integrity passes, native modules load, RTL +
+> multi-window buttons + movable new window all work. The unknowns below were
+> resolved; this doc is kept as the record of how. Key outcomes:
+> - **Risk #1 (integrity):** `Info.plist` `ElectronAsarIntegrity:Resources/app.asar:hash`
+>   has exactly the assumed shape; PlistBuddy update works.
+> - **Risk #2 (signing):** ad-hoc re-sign launches fine, but breaks `Claude Safe
+>   Storage` keychain access → **one-time re-login per patch** (then sticks), and
+>   blocks Claude's Squirrel auto-update.
+> - **Bug fixed:** `asar pack` needs `--unpack "{*.node,spawn-helper}"` or native
+>   modules get packed in and the app crashes at startup.
+> - **Bug fixed:** `$(preflight)` was capturing log output as the app path — logs
+>   now go to stderr.
+> - **Fixed:** new window used `titleBarStyle:'hiddenInset'` with no drag region
+>   (couldn't be moved); now a standard title bar + cascade offset.
+> - **Known gap:** translate-to-Hebrew is best-effort (claude.ai re-renders revert it).
+
 Goal: get the **first-draft macOS patcher working on a real Mac**, the same way
 the Windows patcher was iterated to working on a real PC. This file gives a
 fresh session on the Mac full context — it won't have the Windows chat history

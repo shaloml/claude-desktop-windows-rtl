@@ -15,7 +15,8 @@ powershell -ExecutionPolicy Bypass -File .\patch-claude-windows.ps1
 ./patch-claude-macos.sh
 ```
 
-> **macOS support is a first-draft port** — see the [macOS](#macos) section.
+> **macOS is verified** (on macOS 26 / Apple Silicon). One quirk: the first
+> launch after patching logs you out once — see the [macOS](#macos) section.
 
 ## Features
 
@@ -100,14 +101,31 @@ rather than an MSIX package. The mechanics differ:
 ```
 
 Requirements: `/Applications/Claude.app`, Node.js 22+ (offered via Homebrew if
-missing), and your admin password (sudo writes inside `/Applications`).
+missing), and — only if the app is root-owned — your admin password (the patcher
+re-runs under `sudo` to write inside `/Applications`; if you own the bundle, no
+password is needed). Native modules (`*.node`, node-pty's `spawn-helper`) are
+re-marked as unpacked during repack so the app still loads them.
 
-**Gatekeeper caveat:** editing the bundle invalidates Apple's signature, so the
-patcher re-signs ad-hoc and clears the quarantine flag. If a future macOS / app
-build enforces hardened-runtime *library validation*, ad-hoc re-signing may not
-be enough and the app could refuse to launch — in that case restore with
-`--restore`. This path is **not yet verified on a real Mac**; please report what
-happens.
+**One-time re-login (expected):** editing the bundle invalidates Apple's
+signature, so the patcher re-signs ad-hoc. That changes the app's identity, so
+macOS no longer lets it read the `Claude Safe Storage` keychain key that
+encrypts your saved session — the first launch after patching logs you out.
+Sign in once more (click **Always Allow** if macOS prompts for the keychain);
+it then stays logged in across normal restarts. You only re-login again if you
+re-run the patcher.
+
+**No silent auto-update:** the ad-hoc signature also makes Claude's built-in
+updater reject its own downloads, so a patched Claude won't auto-update and wipe
+the patch. To move to a newer Claude: `--restore`, update Claude normally, then
+re-run the patcher.
+
+**Translate to Hebrew** is best-effort on macOS — claude.ai re-renders and tends
+to revert the one-shot translation, so it may not stick. RTL, the version label,
+refresh, and new-window are the verified extensions.
+
+**Gatekeeper caveat:** if a future macOS / app build enforces hardened-runtime
+*library validation*, ad-hoc re-signing may not be enough and the app could
+refuse to launch — in that case restore with `--restore` and report it.
 
 ## Repository layout
 

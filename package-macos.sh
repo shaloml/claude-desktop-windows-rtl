@@ -98,6 +98,18 @@ NOTES
   it ad-hoc (codesign --sign -) and clears the quarantine flag. If macOS still
   refuses to launch it (hardened runtime / library validation), see the repo
   README's macOS section.
+- ONE-TIME RE-LOGIN: re-signing changes the app's identity, so Claude loses
+  access to the "Claude Safe Storage" keychain key that encrypts your saved
+  session. The first launch after patching will log you out — just sign in once
+  more (and click "Always Allow" if macOS prompts for keychain access). It then
+  stays logged in across normal restarts; you only re-login again if you re-run
+  the patcher (e.g. after a Claude update).
+- The ad-hoc signature also blocks Claude's built-in auto-updater, so a patched
+  Claude won't silently update (and wipe the patch). To move to a new version:
+  --restore, update Claude normally, then re-run the patcher.
+- "Translate to Hebrew" is best-effort and may not stick on claude.ai (the page
+  re-renders and reverts it); the RTL, version label, refresh, and new-window
+  items are the verified features.
 TXT
 
 mkdir -p "$out_dir"
