@@ -28,6 +28,12 @@ set -u
 # --- config -----------------------------------------------------------------
 ASAR_PKG='@electron/asar@4.2.0'
 FUSES_PKG='@electron/fuses@2.1.1'
+# Native modules that MUST stay outside the asar (dlopen can't load a .node from
+# inside an archive). The app ships them in app.asar.unpacked; `asar pack` only
+# preserves that if we pass a matching --unpack glob, else they get packed in and
+# the app crashes loading claude-native at startup. Covers the 3 *.node addons
+# plus node-pty's extensionless spawn-helper.
+ASAR_UNPACK_GLOB='{*.node,spawn-helper}'
 MIN_NODE_MAJOR=22
 STATE_DIR="$HOME/Library/Application Support/ClaudeMacRtl"
 PLIST_LABEL='com.shaloml.claude-mac-rtl.autopatch'
@@ -37,10 +43,12 @@ NO_AUTO_UPDATE=0
 ACTION='install'
 
 # --- colored logging --------------------------------------------------------
-log()  { printf '  \033[36m[*]\033[0m %s\n' "$*"; }
-step() { printf '\n\033[35m> %s\033[0m\n' "$*"; }
-ok()   { printf '  \033[32m[+]\033[0m %s\n' "$*"; }
-warn() { printf '  \033[33m[!]\033[0m %s\n' "$*"; }
+# All diagnostics go to stderr so functions can `printf` a return value to stdout
+# and have `$(...)` capture ONLY that value (e.g. preflight returning app_dir).
+log()  { printf '  \033[36m[*]\033[0m %s\n' "$*" >&2; }
+step() { printf '\n\033[35m> %s\033[0m\n' "$*" >&2; }
+ok()   { printf '  \033[32m[+]\033[0m %s\n' "$*" >&2; }
+warn() { printf '  \033[33m[!]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\n\033[31m[X] %s\033[0m\n' "$*" >&2; exit 1; }
 
 # --- arg parsing ------------------------------------------------------------
@@ -140,16 +148,20 @@ preflight() {
 	local app_dir; app_dir=$(find_claude_app)
 	local node_maj; node_maj=$(node_major)
 
-	printf '\n  Prerequisite check\n'
-	if [[ -n "$app_dir" ]]; then printf '  [+] Claude Desktop      %s\n' "$app_dir"
-	else printf '  [X] Claude Desktop      NOT FOUND\n'; fi
-	if [[ -n "$node_maj" && "$node_maj" -ge $MIN_NODE_MAJOR ]]; then
-		printf '  [+] Node.js >= %s        v%s\n' "$MIN_NODE_MAJOR" "$(node -v | sed 's/^v//')"
-	else
-		printf '  [X] Node.js >= %s        %s\n' "$MIN_NODE_MAJOR" \
-			"$([[ -n "$node_maj" ]] && node -v || echo 'NOT FOUND')"
-	fi
-	printf '\n'
+	# Report goes to stderr; only the final app_dir goes to stdout (so the caller's
+	# `$(preflight)` captures just the path, not this diagnostic text).
+	{
+		printf '\n  Prerequisite check\n'
+		if [[ -n "$app_dir" ]]; then printf '  [+] Claude Desktop      %s\n' "$app_dir"
+		else printf '  [X] Claude Desktop      NOT FOUND\n'; fi
+		if [[ -n "$node_maj" && "$node_maj" -ge $MIN_NODE_MAJOR ]]; then
+			printf '  [+] Node.js >= %s        v%s\n' "$MIN_NODE_MAJOR" "$(node -v | sed 's/^v//')"
+		else
+			printf '  [X] Node.js >= %s        %s\n' "$MIN_NODE_MAJOR" \
+				"$([[ -n "$node_maj" ]] && node -v || echo 'NOT FOUND')"
+		fi
+		printf '\n'
+	} >&2
 
 	[[ -n "$app_dir" ]] || die "Claude Desktop for macOS was not found. Install it from https://claude.ai/download, then re-run."
 	ensure_node
@@ -228,11 +240,15 @@ install_patch() {
 	ok 'package.json main -> mac-entry.js'
 
 	local new_asar="$asar.new"
-	npx --yes "$ASAR_PKG" pack "$tmp" "$new_asar" || die 'asar pack failed.'
+	npx --yes "$ASAR_PKG" pack "$tmp" "$new_asar" --unpack "$ASAR_UNPACK_GLOB" || die 'asar pack failed.'
 	local new_hash; new_hash=$(asar_header_hash "$new_asar")
 	log "New asar hash: $new_hash"
 	mv "$new_asar" "$asar"
-	# asar pack emits a sibling .unpacked of native modules we don't touch.
+	# --unpack made asar pack emit a fresh sibling .unpacked of the native modules.
+	# Its contents are byte-identical to the pristine app.asar.unpacked already in
+	# place (we never modify natives), so discard the freshly-generated orphan and
+	# keep the original. The new asar header still flags those paths as unpacked,
+	# so Electron loads them from app.asar.unpacked as before.
 	[[ -d "$new_asar.unpacked" ]] && rm -rf "$new_asar.unpacked"
 	rm -rf "$tmp"
 
