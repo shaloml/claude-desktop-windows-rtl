@@ -46,6 +46,13 @@ src\
   multi-instance-support.js  floating "+window" button + console trigger
 ```
 
+- **Preflight (`Invoke-Preflight`) runs first and is the only place that may
+  install anything.** It checks Claude Desktop (MSIX) + Node ≥ MinNodeVersion,
+  prints a present/missing report, and prompts before installing Node (winget
+  `OpenJS.NodeJS.LTS`) or patching. `-Yes` auto-approves (and is forwarded across
+  the UAC self-elevation). A missing Claude is fatal (can't auto-install it); a
+  missing/old Node is offered. Node detection must survive UAC — see the
+  PATH-forwarding note below and `Get-NodeCandidateDirs`.
 - The wrapper attaches ONE `app.on('web-contents-created')` listener. Every
   window/webview gets: RTL CSS+JS, the multi-window button, and the context menu
   (RTL toggle, refresh, translate, new window, version label).

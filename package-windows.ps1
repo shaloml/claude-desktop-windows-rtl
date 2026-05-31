@@ -78,15 +78,21 @@ REQUIREMENTS
 ------------
 - Windows 10/11 with the official Claude Desktop installed
   (Microsoft Store / MSIX build).
-- Node.js 22.12 or newer  ->  https://nodejs.org  (provides npx).
 - Administrator rights (the script elevates itself via UAC).
+- Node.js 22.12+ — the patcher checks for it and, if missing/too old, offers
+  to install Node LTS via winget (with your confirmation).
 
 INSTALL
 -------
 1. Unzip this folder anywhere (e.g. your Desktop).
 2. Right-click "Run-Patch.cmd" -> Run as administrator.
    (Or in PowerShell:  powershell -ExecutionPolicy Bypass -File .\patch-claude-windows.ps1 )
-3. Approve the UAC prompt. Claude closes, gets patched, and relaunches.
+3. The patcher runs a prerequisite check, shows what's present/missing, and
+   asks before installing Node or patching. Approve the prompts; Claude
+   closes, gets patched, and relaunches.
+
+Unattended (auto-approve all prompts):
+   powershell -ExecutionPolicy Bypass -File .\patch-claude-windows.ps1 -Yes
 
 After each Claude Desktop auto-update the patch is replaced by the
 update — just run the patcher again to re-apply it.

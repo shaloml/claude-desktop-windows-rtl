@@ -21,8 +21,9 @@ powershell -ExecutionPolicy Bypass -File .\patch-claude-windows.ps1
 ## Requirements
 
 - Windows 10/11 with the **official Claude Desktop** installed (MSIX/Store build).
-- **Node.js ≥ 22.12** with `npx` — <https://nodejs.org>.
 - Administrator rights (the patcher self-elevates via UAC).
+- **Node.js ≥ 22.12** — the patcher checks for it and, if missing/too old, offers
+  to install Node LTS automatically via `winget` (with your confirmation).
 
 ## Install
 
@@ -30,7 +31,15 @@ powershell -ExecutionPolicy Bypass -File .\patch-claude-windows.ps1
    clone this repo) and unzip it.
 2. Right-click **`Run-Patch.cmd`** → **Run as administrator** (or run the
    PowerShell line above).
-3. Approve the UAC prompt. Claude closes, gets patched, and relaunches.
+3. The patcher runs a **prerequisite check**, prints what's present/missing, and
+   asks before installing anything (Node) or patching. Approve the prompts;
+   Claude closes, gets patched, and relaunches.
+
+For unattended install (auto-approve every prompt), add `-Yes`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\patch-claude-windows.ps1 -Yes
+```
 
 Re-run after every Claude Desktop auto-update (the update replaces the patch).
 

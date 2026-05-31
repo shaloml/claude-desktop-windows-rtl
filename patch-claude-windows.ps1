@@ -18,10 +18,15 @@
     Install (default) or Restore.
 .PARAMETER SourceDir
     Directory holding win-entry.js / win-wrapper.js. Defaults to this script's
-    folder; the scripts/*-support.js modules are taken from ..\scripts.
+    folder; the *-support.js modules are resolved from .\src, the same folder, or
+    ..\scripts (whichever exists).
+.PARAMETER Yes
+    Unattended: auto-approve installing missing prerequisites (Node via winget)
+    and the patch itself, without prompting.
 .NOTES
-    Run from an elevated PowerShell. Requires Node.js >= 22.12 (npx) for
-    @electron/asar and @electron/fuses.
+    Self-elevates via UAC. Runs a prerequisite check first: Claude Desktop (MSIX)
+    must be installed; Node.js >= 22.12 is required and offered for automatic
+    install via winget if missing.
 #>
 [CmdletBinding()]
 param(
@@ -31,7 +36,10 @@ param(
 	# Internal: the non-elevated session's PATH, forwarded across the UAC
 	# boundary so the elevated run can locate a per-user Node (nvm/winget/scoop).
 	# Env vars don't survive RunAs, so this is passed as a parameter.
-	[string]$UserPath
+	[string]$UserPath,
+	# Unattended mode: auto-approve installing missing prerequisites (e.g. Node
+	# via winget) without prompting. Without this the preflight asks first.
+	[switch]$Yes
 )
 
 # Make the forwarded user PATH available to Get-NodeCandidateDirs.
@@ -67,6 +75,7 @@ if (-not $isAdmin) {
 		'-UserPath', $env:PATH
 	)
 	if ($SourceDir) { $argList += @('-SourceDir', $SourceDir) }
+	if ($Yes) { $argList += '-Yes' }
 	Start-Process powershell.exe -Verb RunAs -ArgumentList $argList
 	exit
 }
@@ -361,15 +370,131 @@ function Assert-NodeToolchain {
 		"elevated PowerShell that already has 'node --version' working.")
 }
 
+# -----------------------------------------------------------------------------
+# Preflight: check prerequisites, report what's present/missing, and offer to
+# install what's missing (with consent) before any changes are made.
+# -----------------------------------------------------------------------------
+
+# Return the runnable Node major.minor.patch as [version], searching candidate
+# dirs (and prepending the first that works) so the rest of the run can use it.
+function Resolve-NodeVersion {
+	# Fast path: node already on PATH.
+	$raw = (cmd.exe /c 'node --version 2>nul' | Out-String).Trim()
+	if ($raw -match 'v?(\d+)\.(\d+)\.(\d+)') {
+		return [version]"$($Matches[1]).$($Matches[2]).$($Matches[3])"
+	}
+	# Slow path: try known install dirs, prepend the first with a working node.
+	foreach ($dir in (Get-NodeCandidateDirs)) {
+		$raw = (cmd.exe /c "`"$dir\node.exe`" --version 2>nul" | Out-String).Trim()
+		if ($raw -match 'v?(\d+)\.(\d+)\.(\d+)') {
+			$env:PATH = "$dir;$env:PATH"
+			return [version]"$($Matches[1]).$($Matches[2]).$($Matches[3])"
+		}
+	}
+	return $null
+}
+
+function Find-Winget {
+	$cmd = Get-Command winget -ErrorAction SilentlyContinue
+	if ($cmd) { return $cmd.Source }
+	# winget (App Installer) lives under WindowsApps; resolve its real path since
+	# the elevated PATH may not include the per-user alias.
+	$wa = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\winget.exe'
+	if (Test-Path $wa) { return $wa }
+	$pkg = Get-ChildItem (Join-Path $env:ProgramFiles 'WindowsApps') `
+		-Filter 'winget.exe' -Recurse -ErrorAction SilentlyContinue |
+		Select-Object -First 1
+	if ($pkg) { return $pkg.FullName }
+	return $null
+}
+
+function Install-NodeViaWinget {
+	$winget = Find-Winget
+	if (-not $winget) {
+		Write-Warn2 'winget (App Installer) is not available on this machine.'
+		return $false
+	}
+	Write-Step 'Installing Node.js LTS via winget...'
+	& $winget install --id OpenJS.NodeJS.LTS --silent `
+		--accept-package-agreements --accept-source-agreements 2>&1 |
+		ForEach-Object { Write-Host "  $_" }
+	# winget updates the machine PATH but not this process; pull the new node in.
+	$ver = Resolve-NodeVersion
+	if ($ver) { Write-Ok "Node $ver installed."; return $true }
+	Write-Warn2 'Node install reported done but node is still not runnable in this session.'
+	return $false
+}
+
+function Confirm-Action([string]$Question) {
+	if ($Yes) { Write-Log "$Question -> auto-yes (-Yes)"; return $true }
+	$ans = Read-Host "$Question [Y/n]"
+	return ($ans -eq '' -or $ans -match '^(y|yes)$')
+}
+
+# Returns $ClaudeDir if all prerequisites are satisfied (after any approved
+# installs); throws with a clear message otherwise. Prints a status summary.
+function Invoke-Preflight {
+	Write-Step 'Checking prerequisites...'
+	$min = [version]$script:MinNodeVersion
+
+	# 1) Claude Desktop (MSIX).
+	$claudeDir = Find-ClaudeDir
+	$claudeOk = [bool]$claudeDir -and (Test-Path (Join-Path $claudeDir 'app\resources\app.asar'))
+
+	# 2) Node.js >= min, able to run the asar tool.
+	$nodeVer = Resolve-NodeVersion
+	$nodeOk = $nodeVer -and ($nodeVer -ge $min)
+
+	# Report card.
+	$mark = { param($ok) if ($ok) { '[+]' } else { '[X]' } }
+	Write-Host ''
+	Write-Host '  Prerequisite check' -ForegroundColor Cyan
+	Write-Host ('  {0} Claude Desktop (MSIX)   {1}' -f (& $mark $claudeOk),
+		$(if ($claudeDir) { $claudeDir } else { 'NOT FOUND' }))
+	Write-Host ('  {0} Node.js >= {1}        {2}' -f (& $mark $nodeOk), $script:MinNodeVersion,
+		$(if ($nodeVer) { "v$nodeVer" } else { 'NOT FOUND' }))
+	Write-Host ''
+
+	# Claude missing is fatal — we can't install it for the user.
+	if (-not $claudeOk) {
+		throw ("Claude Desktop (Microsoft Store / MSIX build) was not found. " +
+			"Install it from https://claude.ai/download, then re-run.")
+	}
+
+	# Node missing/too old — offer to install.
+	if (-not $nodeOk) {
+		$why = if ($nodeVer) { "Node v$nodeVer is older than the required v$($script:MinNodeVersion)." }
+			else { 'Node.js was not found.' }
+		Write-Warn2 $why
+		if (Confirm-Action 'Install Node.js LTS now (via winget)?') {
+			if (Install-NodeViaWinget) {
+				$nodeVer = Resolve-NodeVersion
+				$nodeOk = $nodeVer -and ($nodeVer -ge $min)
+			}
+		}
+		if (-not $nodeOk) {
+			throw ("Node.js >= $($script:MinNodeVersion) is required. " +
+				"Install it from https://nodejs.org (LTS), then re-run. " +
+				"(Automatic install needs winget / App Installer.)")
+		}
+		Write-Ok "Node $nodeVer ready."
+	}
+
+	# Final confirmation before touching the install.
+	Write-Host ''
+	if (-not (Confirm-Action "Patch Claude Desktop now?")) {
+		throw 'Aborted by user.'
+	}
+	return $claudeDir
+}
+
 # =============================================================================
 # INSTALL
 # =============================================================================
 function Install-Patch {
 	Write-Host "`n=== Claude Desktop (Windows) extensions patch ===`n" -ForegroundColor Cyan
 
-	$ClaudeDir = Find-ClaudeDir
-	if (-not $ClaudeDir) { throw 'MSIX Claude install not found.' }
-	Write-Ok "Found Claude at: $ClaudeDir"
+	$ClaudeDir = Invoke-Preflight
 
 	$AppDir = Join-Path $ClaudeDir 'app'
 	$ResourcesDir = Join-Path $AppDir 'resources'
