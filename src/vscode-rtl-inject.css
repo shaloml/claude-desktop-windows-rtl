@@ -1,10 +1,15 @@
 /* Auto-RTL guards for the Claude Code VS Code webview.
  *
- * Appended (between sentinel comments) to <ext>/webview/index.css by
- * patch-claude-code-vscode.sh. Per-paragraph direction is handled by the JS
- * payload, which stamps dir="auto"; these rules only pin the things that must
- * stay LTR even when they sit inside an RTL paragraph. Keep this minimal so it
- * can't fight the webview's own layout. */
+ * Appended (between sentinel comments) to <ext>/webview/index.css by the
+ * patcher. The JS payload pins an explicit dir="rtl"/"ltr" on each text block
+ * (so prose flips per-paragraph while tool rows / code / buttons stay LTR), and
+ * tags the assistant turn with data-claude-rtl-gutter when its prose is RTL.
+ * These rules then (1) keep code LTR even inside an RTL block, and (2) mirror
+ * the turn's physical, LTR-only gutter + timeline rail to the right for an RTL
+ * turn — otherwise the right-aligned Hebrew jams against the edge with no
+ * padding. The gutter marker is a plain data-attribute, NOT dir, so it never
+ * cascades RTL onto the turn's non-prose UI. Keep this minimal so it can't
+ * fight the webview's own layout. */
 
 /* Code (block and inline) is always logically left-to-right: a Hebrew comment
  * as the first glyph must not reorder the line. unicode-bidi:normal stops an
@@ -16,4 +21,29 @@ code,
 .monaco-editor {
 	direction: ltr;
 	unicode-bidi: normal;
+}
+
+/* Assistant turns carry a left-only timeline gutter (padding-left) plus an
+ * absolutely-positioned dot (:before) and vertical rail (:after) pinned to the
+ * left. Physical left/padding-left never follow `direction`, so under RTL the
+ * right-aligned Hebrew ran straight into the edge while the rail stayed left.
+ * When the JS marks a turn RTL, flip the gutter and the rail to the right so
+ * the mirror is complete. LTR turns are left untouched. */
+[class*="timelineMessage"][data-claude-rtl-gutter] {
+	padding-left: 0;
+	padding-right: 30px;
+}
+[class*="timelineMessage"][data-claude-rtl-gutter]:before {
+	left: auto;
+	right: 9px;
+}
+[class*="timelineMessage"][data-claude-rtl-gutter]:after {
+	left: auto;
+	right: 12px;
+}
+
+/* The user-message bubble hard-codes text-align:left; right-align it when its
+ * own content is RTL so the Hebrew sits against its padded edge, not the left. */
+[class*="userMessageContainer"][dir="rtl"] {
+	text-align: right;
 }

@@ -19,8 +19,16 @@
 	if (window.__claudeCodeRtlInit) return;
 	window.__claudeCodeRtlInit = true;
 
-	// Block elements whose direction should follow their own text content.
+	// Block elements whose direction follows their own first strong character.
 	var BLOCK_SEL = 'p,li,h1,h2,h3,h4,h5,h6,blockquote,td,th,dd,dt,summary,figcaption';
+	// The user-message bubble is plain pre-wrap text (no inner <p>), so we pin dir
+	// on its container too — it is single-direction user text, safe to flip whole.
+	var USERMSG_SEL = '[class*="userMessageContainer"]';
+	// Assistant turns: we deliberately DON'T set dir here (that would flip the
+	// turn's tool rows, code headers and buttons). We only tag the turn so the CSS
+	// can mirror its physical left gutter + timeline rail to the right. Substring
+	// class match survives the extension's per-build hashed class suffixes.
+	var GUTTER_SEL = '[class*="timelineMessage"]';
 	// Never touch code or editors — they must stay LTR regardless of first glyph.
 	var SKIP_SEL = 'pre,code,textarea,input,[class*="codeBlock"],[class*="CodeBlock"],.monaco-editor';
 
@@ -51,13 +59,30 @@
 		el.__rtlLocked = true;
 	}
 
-	// Decide `root` and every block descendant it contains.
+	// Tag (do NOT set dir on) an assistant turn whose prose reads RTL, so the CSS
+	// flips its left gutter + timeline rail to the right. A plain data-attribute
+	// marker, so RTL never cascades onto the turn's tool rows / code / buttons.
+	// Locked once decided, like decide().
+	function markGutter(el) {
+		if (el.__gutterLocked) return;
+		var dir = firstStrongDir(el.textContent || '');
+		if (!dir) return; // still neutral; re-check on a later tick
+		if (dir === 'rtl') el.setAttribute('data-claude-rtl-gutter', '1');
+		el.__gutterLocked = true;
+	}
+
+	// Decide `root` and every block/container descendant it contains.
 	function decideWithin(root) {
 		if (!root || root.nodeType !== 1) return;
-		if (root.matches && root.matches(BLOCK_SEL)) decide(root);
+		if (root.matches) {
+			if (root.matches(GUTTER_SEL)) markGutter(root);
+			if (root.matches(USERMSG_SEL) || root.matches(BLOCK_SEL)) decide(root);
+		}
 		if (root.querySelectorAll) {
-			var found = root.querySelectorAll(BLOCK_SEL);
-			for (var i = 0; i < found.length; i++) decide(found[i]);
+			var turns = root.querySelectorAll(GUTTER_SEL);
+			for (var i = 0; i < turns.length; i++) markGutter(turns[i]);
+			var blocks = root.querySelectorAll(USERMSG_SEL + ',' + BLOCK_SEL);
+			for (var j = 0; j < blocks.length; j++) decide(blocks[j]);
 		}
 	}
 
@@ -90,7 +115,14 @@
 			var batch = pending;
 			pending = [];
 			try {
-				for (var n = 0; n < batch.length; n++) decideWithin(batch[n]);
+				for (var n = 0; n < batch.length; n++) {
+					decideWithin(batch[n]);
+					// A turn often streams in neutral-first (a spinner or tool row
+					// before any Hebrew). Re-check its enclosing turn so the gutter
+					// locks the moment the first strong glyph arrives.
+					var turn = batch[n].closest && batch[n].closest(GUTTER_SEL);
+					if (turn) markGutter(turn);
+				}
 				stampInput();
 			} catch (e) { /* ignore */ }
 		}
