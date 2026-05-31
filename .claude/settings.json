@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node --check:*)",
+      "Bash(git status:*)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(git add:*)",
+      "Bash(git show:*)",
+      "Bash(npx --yes @electron/asar:*)",
+      "Bash(unzip -l:*)"
+    ]
+  }
+}
