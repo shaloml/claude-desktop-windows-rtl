@@ -59,6 +59,20 @@ grep -c openNewWindow /tmp/lc/win-wrapper.js
 powershell -ExecutionPolicy Bypass -File patch-claude-windows.ps1 -Action Restore
 ```
 
+## Auto-update (re-patch after Claude updates)
+
+A Claude update wipes the patch. Offer/enable the watcher so it re-applies
+automatically:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File patch-claude-windows.ps1 -Action EnableAutoUpdate
+powershell -ExecutionPolicy Bypass -File patch-claude-windows.ps1 -Action DisableAutoUpdate
+```
+
+State + stable bundle + log live under `%ProgramData%\ClaudeWindowsRtl\`. To
+check it's working: `Get-ScheduledTask ClaudeWindowsRtlAutoPatch` and read
+`%ProgramData%\ClaudeWindowsRtl\watcher.log`.
+
 ## If it fails
 
 - App won't launch → likely EDR. Restore, add an EDR exclusion for the Claude

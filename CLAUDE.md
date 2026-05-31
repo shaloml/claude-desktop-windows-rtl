@@ -91,10 +91,26 @@ If you move files, keep all three candidates working.
 - The patcher backs up `app.asar` / `claude.exe` / `cowork-svc.exe` to `*.bak`
   on first run and **restores from `*.bak` before every re-patch**, so re-running
   is safe and always patches clean originals. `-Action Restore` reverts.
-- Claude Desktop auto-updates wipe the patch — just re-run Install.
 - **Never kill processes by name alone.** Claude Code (the CLI) also runs
   `claude.exe`; `Stop-ClaudeServices` must scope kills to the install dir path,
   or it will terminate the session driving the patch.
+
+## Auto-update (re-patch after Claude updates)
+
+- Claude Desktop auto-updates install a fresh MSIX and wipe the patch. After a
+  successful patch, `Install-Patch` records the patched version
+  (`%ProgramData%\ClaudeWindowsRtl\state.json`), stashes a stable copy of the
+  patcher + the 5 JS files under `...\app\`, and offers to enable a watcher.
+- The watcher (`-Action EnableAutoUpdate` → Scheduled Task at logon + every 3h,
+  RunLevel Highest) compares the installed Claude version to the patched version
+  and, when they differ, runs `patch-claude-windows.ps1 -Action Install -Yes`
+  from the stable copy. Logs to `...\watcher.log`.
+- The watcher script is written to disk as plain `.ps1` (NOT `-EncodedCommand`)
+  to avoid AV heuristics. It needs no network — everything runs from the local
+  stable bundle.
+- Explicit `-Action Restore` disables the watcher (a deliberate revert means
+  "stop"); an internal rollback leaves it alone.
+- `-EnableAutoUpdate` / `-Yes` skip the prompts (forwarded across UAC).
 
 ## Known constraints
 

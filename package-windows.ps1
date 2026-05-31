@@ -94,8 +94,15 @@ INSTALL
 Unattended (auto-approve all prompts):
    powershell -ExecutionPolicy Bypass -File .\patch-claude-windows.ps1 -Yes
 
-After each Claude Desktop auto-update the patch is replaced by the
-update — just run the patcher again to re-apply it.
+STAYING PATCHED ACROSS UPDATES
+------------------------------
+Claude Desktop auto-updates by installing a fresh copy, which removes the
+patch. At the end of a successful patch the installer offers to enable
+auto-re-patch (a Scheduled Task that re-applies the patch automatically when
+Claude updates). You can also toggle it manually:
+   ...\patch-claude-windows.ps1 -Action EnableAutoUpdate
+   ...\patch-claude-windows.ps1 -Action DisableAutoUpdate
+Or just re-run the patcher yourself after each Claude update.
 
 UNINSTALL / RESTORE ORIGINAL
 ----------------------------

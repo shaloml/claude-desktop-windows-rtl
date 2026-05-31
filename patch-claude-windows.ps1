@@ -30,7 +30,7 @@
 #>
 [CmdletBinding()]
 param(
-	[ValidateSet('Install', 'Restore')]
+	[ValidateSet('Install', 'Restore', 'EnableAutoUpdate', 'DisableAutoUpdate')]
 	[string]$Action = 'Install',
 	[string]$SourceDir,
 	# Internal: the non-elevated session's PATH, forwarded across the UAC
@@ -38,8 +38,10 @@ param(
 	# Env vars don't survive RunAs, so this is passed as a parameter.
 	[string]$UserPath,
 	# Unattended mode: auto-approve installing missing prerequisites (e.g. Node
-	# via winget) without prompting. Without this the preflight asks first.
-	[switch]$Yes
+	# via winget) and the patch itself, without prompting.
+	[switch]$Yes,
+	# Enable the auto-re-patch watcher (Scheduled Task) without being asked.
+	[switch]$EnableAutoUpdate
 )
 
 # Make the forwarded user PATH available to Get-NodeCandidateDirs.
@@ -52,6 +54,14 @@ $script:AsarPackage  = '@electron/asar@4.2.0'
 $script:FusesPackage = '@electron/fuses@2.1.1'
 $script:MinNodeVersion = '22.12.0'
 $global:TmpDir = Join-Path ([IO.Path]::GetTempPath()) 'claude_win_patch_tmp'
+
+# Auto-update (watcher) locations. ProgramData is admin-writable, survives user
+# profile changes, and is where the stable bundle + state + watcher script live.
+$script:StateDir   = Join-Path $env:ProgramData 'ClaudeWindowsRtl'
+$script:StateFile  = Join-Path $script:StateDir 'state.json'
+$script:StableApp  = Join-Path $script:StateDir 'app'      # copy of patcher + src
+$script:WatcherPs1 = Join-Path $script:StateDir 'watcher.ps1'
+$script:TaskName   = 'ClaudeWindowsRtlAutoPatch'
 
 # Files we inject into the asar root. win-entry/win-wrapper come from SourceDir;
 # the three support modules come from the repo's scripts/ folder.
@@ -488,6 +498,160 @@ function Invoke-Preflight {
 	return $claudeDir
 }
 
+# -----------------------------------------------------------------------------
+# Auto-update watcher
+#
+# Claude Desktop auto-updates by installing a NEW MSIX package and replacing all
+# files with fresh originals — wiping the patch. A logon + periodic Scheduled
+# Task runs a small watcher that compares the installed version to the
+# last-patched version and silently re-applies the patch (-Yes) when they differ.
+#
+# The watcher runs the patcher from a STABLE copy under %ProgramData% (not the
+# user's Downloads folder, which may be deleted), so it keeps working forever.
+# -----------------------------------------------------------------------------
+
+function Get-ClaudeVersion {
+	# Version string of the currently-installed MSIX Claude (e.g. 1.9659.2.0).
+	$pkg = Get-AppxPackage | Where-Object {
+		$_.Name -like '*Claude*' -and $_.InstallLocation -like '*WindowsApps*'
+	} | Select-Object -First 1
+	if ($pkg -and $pkg.Version) { return [string]$pkg.Version }
+	# Fallback: parse from the install-folder name Claude_<ver>_x64__...
+	$dir = Find-ClaudeDir
+	if ($dir -and (Split-Path $dir -Leaf) -match '^Claude_([\d.]+)_') { return $Matches[1] }
+	return $null
+}
+
+function Save-PatchState([string]$Version) {
+	if (-not (Test-Path $script:StateDir)) {
+		New-Item -ItemType Directory -Path $script:StateDir -Force | Out-Null
+	}
+	$state = [ordered]@{
+		patchedVersion = $Version
+		patchedAt      = (Get-Date).ToUniversalTime().ToString('o')
+	}
+	$state | ConvertTo-Json | Set-Content -Path $script:StateFile -Encoding UTF8
+}
+
+function Get-PatchedVersion {
+	if (-not (Test-Path $script:StateFile)) { return $null }
+	try { return (Get-Content $script:StateFile -Raw | ConvertFrom-Json).patchedVersion }
+	catch { return $null }
+}
+
+# Copy the patcher + the five resolved JS payloads into the stable ProgramData
+# app dir, so the watcher can re-run the patch independent of where the user
+# originally unzipped it.
+function Save-StableBundle([hashtable]$Sources) {
+	if (Test-Path $script:StableApp) { Remove-Item $script:StableApp -Recurse -Force }
+	New-Item -ItemType Directory -Path $script:StableApp -Force | Out-Null
+	Copy-Item $PSCommandPath (Join-Path $script:StableApp 'patch-claude-windows.ps1') -Force
+	foreach ($name in $Sources.Keys) {
+		Copy-Item $Sources[$name] (Join-Path $script:StableApp $name) -Force
+	}
+}
+
+function Save-WatcherScript {
+	if (-not (Test-Path $script:StateDir)) {
+		New-Item -ItemType Directory -Path $script:StateDir -Force | Out-Null
+	}
+	# Single-quoted here-string: written verbatim, evaluated at run time. Closing
+	# '@ MUST be at column 0.
+	$body = @'
+# Claude Windows RTL — auto-re-patch watcher. Runs elevated from a Scheduled
+# Task at logon and on a schedule. Re-applies the patch when Claude Desktop
+# updates to a version newer/different than the one last patched.
+$ErrorActionPreference = 'Continue'
+$stateDir  = Join-Path $env:ProgramData 'ClaudeWindowsRtl'
+$stateFile = Join-Path $stateDir 'state.json'
+$patcher   = Join-Path $stateDir 'app\patch-claude-windows.ps1'
+$logFile   = Join-Path $stateDir 'watcher.log'
+
+function WLog($m) {
+	try {
+		if ((Test-Path $logFile) -and (Get-Item $logFile).Length -gt 1MB) {
+			Move-Item $logFile "$logFile.old" -Force
+		}
+		"$([DateTime]::Now.ToString('o'))  $m" | Out-File -Append -FilePath $logFile -Encoding UTF8
+	} catch {}
+}
+
+function InstalledVersion {
+	$pkg = Get-AppxPackage | Where-Object {
+		$_.Name -like '*Claude*' -and $_.InstallLocation -like '*WindowsApps*'
+	} | Select-Object -First 1
+	if ($pkg -and $pkg.Version) { return [string]$pkg.Version }
+	return $null
+}
+
+function PatchedVersion {
+	if (-not (Test-Path $stateFile)) { return $null }
+	try { return (Get-Content $stateFile -Raw | ConvertFrom-Json).patchedVersion }
+	catch { return $null }
+}
+
+$inst = InstalledVersion
+if (-not $inst) { WLog 'No installed Claude found; nothing to do.'; return }
+$patched = PatchedVersion
+if ($inst -eq $patched) { WLog "Up to date (v$inst already patched)."; return }
+if (-not (Test-Path $patcher)) { WLog "Patcher missing at $patcher; cannot auto-repatch."; return }
+
+WLog "Version change detected (installed=$inst, patched=$patched) — re-applying patch..."
+try {
+	& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $patcher -Action Install -Yes *>&1 |
+		ForEach-Object { WLog "  $_" }
+	WLog 'Re-patch finished.'
+} catch {
+	WLog "Re-patch failed: $($_.Exception.Message)"
+}
+'@
+	$utf8Bom = New-Object System.Text.UTF8Encoding $true
+	[IO.File]::WriteAllText($script:WatcherPs1, $body, $utf8Bom)
+}
+
+function Install-AutoUpdateTask {
+	Write-Step 'Enabling auto-re-patch (Scheduled Task)...'
+	if (-not (Test-Path $script:StateFile)) {
+		Write-Warn2 'No patch state yet — run the patch (option Install) first.'
+		return
+	}
+	Save-WatcherScript
+	try {
+		$user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+		$action = New-ScheduledTaskAction -Execute 'powershell.exe' `
+			-Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$script:WatcherPs1`""
+		$triggers = @(
+			(New-ScheduledTaskTrigger -AtLogOn -User $user)
+		)
+		# Add an hourly repetition so an update mid-session is caught without a logon.
+		$daily = New-ScheduledTaskTrigger -Once -At ([DateTime]::Today.AddMinutes(5)) `
+			-RepetitionInterval (New-TimeSpan -Hours 3) -RepetitionDuration ([TimeSpan]::MaxValue)
+		$triggers += $daily
+		$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable `
+			-MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+			-ExecutionTimeLimit ([TimeSpan]::FromMinutes(30))
+		$principal = New-ScheduledTaskPrincipal -UserId $user -RunLevel Highest -LogonType Interactive
+		Register-ScheduledTask -TaskName $script:TaskName -Action $action -Trigger $triggers `
+			-Settings $settings -Principal $principal `
+			-Description 'Re-applies the Claude Windows RTL patch after Claude Desktop updates.' `
+			-Force | Out-Null
+		Write-Ok "Auto-re-patch enabled (task '$script:TaskName')."
+		Write-Log "Watcher log: $(Join-Path $script:StateDir 'watcher.log')"
+	} catch {
+		Write-Warn2 "Failed to register scheduled task: $($_.Exception.Message)"
+	}
+}
+
+function Uninstall-AutoUpdateTask {
+	Write-Step 'Disabling auto-re-patch...'
+	$existing = Get-ScheduledTask -TaskName $script:TaskName -ErrorAction SilentlyContinue
+	if (-not $existing) { Write-Warn2 "Task '$script:TaskName' is not installed."; return }
+	try {
+		Unregister-ScheduledTask -TaskName $script:TaskName -Confirm:$false -ErrorAction Stop
+		Write-Ok "Auto-re-patch disabled."
+	} catch { Write-Warn2 "Failed to remove task: $($_.Exception.Message)" }
+}
+
 # =============================================================================
 # INSTALL
 # =============================================================================
@@ -701,7 +865,28 @@ function Install-Patch {
 		}
 
 		if (Test-Path $global:TmpDir) { Remove-Item $global:TmpDir -Recurse -Force }
+
+		# Record what we patched + stash a stable copy of the bundle so the
+		# auto-update watcher can re-apply the patch after a Claude update.
+		$ver = Get-ClaudeVersion
+		Save-PatchState $ver
+		try { Save-StableBundle $sources } catch { Write-Warn2 "Could not stash stable bundle: $($_.Exception.Message)" }
+
 		Write-Host "`n=== PATCH COMPLETE ===`n" -ForegroundColor Green
+
+		# Offer (or auto-enable) auto-re-patch so Claude updates don't silently
+		# drop the extensions. Skip the prompt if the task already exists.
+		$taskExists = [bool](Get-ScheduledTask -TaskName $script:TaskName -ErrorAction SilentlyContinue)
+		if ($taskExists) {
+			# Keep the stable bundle + watcher current with this version.
+			Save-WatcherScript
+			Write-Log 'Auto-re-patch already enabled; refreshed.'
+		} elseif ($EnableAutoUpdate -or (Confirm-Action 'Auto-re-apply this patch after Claude Desktop updates?')) {
+			Install-AutoUpdateTask
+		} else {
+			Write-Log "Tip: re-run after a Claude update, or enable auto-re-patch with -Action EnableAutoUpdate."
+		}
+
 		Start-ClaudeApp
 	} catch {
 		Write-Host "`n[X] ERROR: $($_.Exception.Message)" -ForegroundColor Red
@@ -749,11 +934,20 @@ function Restore-Patch {
 			Write-Ok "Restored $(Split-Path $it.O -Leaf)"
 		}
 	}
-	if (-not $IsRollback) { Write-Host "`n=== Restore complete ===`n" -ForegroundColor Green }
+	if (-not $IsRollback) {
+		# A deliberate restore means "I'm done" — stop the watcher so it doesn't
+		# silently re-patch on the next Claude update. (Rollback leaves it alone.)
+		if (Get-ScheduledTask -TaskName $script:TaskName -ErrorAction SilentlyContinue) {
+			Uninstall-AutoUpdateTask
+		}
+		Write-Host "`n=== Restore complete ===`n" -ForegroundColor Green
+	}
 }
 
 # =============================================================================
 switch ($Action) {
-	'Install' { Install-Patch }
-	'Restore' { Restore-Patch }
+	'Install'           { Install-Patch }
+	'Restore'           { Restore-Patch }
+	'EnableAutoUpdate'  { Install-AutoUpdateTask }
+	'DisableAutoUpdate' { Uninstall-AutoUpdateTask }
 }

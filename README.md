@@ -49,6 +49,8 @@ Re-run after every Claude Desktop auto-update (the update replaces the patch).
 powershell -ExecutionPolicy Bypass -File .\patch-claude-windows.ps1 -Action Restore
 ```
 
+Restore also disables auto-re-patch so it won't come back on the next update.
+
 ## How it works
 
 The MSIX build locks the app files and enforces ASAR integrity, so the patcher:
