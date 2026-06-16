@@ -1,9 +1,9 @@
-# Claude Desktop — Windows & macOS RTL & extensions patch
+# Claude Desktop — Windows, macOS & Linux RTL & extensions patch
 
 In-place patcher that adds RTL (Hebrew/Arabic) support and a few quality-of-life
 extensions to the **official Claude Desktop** — no repackaged installer, no
-rebuild. The same JavaScript extensions run on both platforms; each OS has its
-own patcher.
+rebuild. The same JavaScript extensions run on all three platforms; each OS has
+its own patcher.
 
 > Also here: a separate, lightweight patcher that adds **automatic Hebrew RTL to
 > the Claude Code VS Code extension** — see
@@ -19,8 +19,15 @@ powershell -ExecutionPolicy Bypass -File .\patch-claude-windows.ps1
 ./patch-claude-macos.sh
 ```
 
+```bash
+# Linux (run as your normal user, from an unpacked release or this repo root):
+./patch-claude-linux.sh
+```
+
 > **macOS is verified** (on macOS 26 / Apple Silicon). One quirk: the first
 > launch after patching logs you out once — see the [macOS](#macos) section.
+> **Linux** is the simplest target (no integrity hash, no code-signing) — see
+> the [Linux](#linux) section.
 
 ## Features
 
@@ -90,12 +97,12 @@ macOS uses the same JS extensions but a different patcher
 (`patch-claude-macos.sh`), because the app ships as `/Applications/Claude.app`
 rather than an MSIX package. The mechanics differ:
 
-| | Windows (MSIX) | macOS (.app) |
-|---|---|---|
-| file access | `takeown` + `icacls` | `sudo` (no MSIX lock) |
-| asar integrity | byte-replace hash in `claude.exe` | update `ElectronAsarIntegrity` in `Info.plist` |
-| code signing | self-signed cert + Root store | `codesign --force --deep --sign -` (ad-hoc) + clear quarantine |
-| auto-re-patch | Scheduled Task | launchd LaunchAgent |
+| | Windows (MSIX) | macOS (.app) | Linux (deb) |
+|---|---|---|---|
+| file access | `takeown` + `icacls` | `sudo` (no MSIX lock) | `sudo` (root-owned `/usr/lib`) |
+| asar integrity | byte-replace hash in `claude.exe` | update `ElectronAsarIntegrity` in `Info.plist` | **none** — fuse is off |
+| code signing | self-signed cert + Root store | `codesign --force --deep --sign -` (ad-hoc) + clear quarantine | **none** — binary unsigned |
+| auto-re-patch | Scheduled Task | launchd LaunchAgent | systemd system timer |
 
 ```bash
 ./patch-claude-macos.sh                  # install (prompts for prerequisites)
@@ -131,6 +138,60 @@ refresh, and new-window are the verified extensions.
 *library validation*, ad-hoc re-signing may not be enough and the app could
 refuse to launch — in that case restore with `--restore` and report it.
 
+## Linux
+
+Linux uses the same JS extensions but its own patcher (`patch-claude-linux.sh`),
+targeting a `claude-desktop-debian`-layout install (typically
+`/usr/lib/claude-desktop`, with the asar at
+`node_modules/electron/dist/resources/app.asar`). It's the **simplest** of the
+three: the Linux Electron binary ships with the asar-integrity fuses **off** and
+is **unsigned**, so there's no hash to patch and no re-signing — the patcher just
+backs up `app.asar`, injects the five JS modules, repoints `main` at
+`linux-entry.js`, and repacks.
+
+```bash
+./patch-claude-linux.sh                  # install (prompts for prerequisites)
+./patch-claude-linux.sh --yes            # unattended
+./patch-claude-linux.sh --no-auto-update # skip the auto-re-patch timer
+./patch-claude-linux.sh --restore        # revert to the original app.asar
+```
+
+**Run it as your normal user, not under `sudo`.** The heavy lifting (`npx
+@electron/asar` extract/pack) runs as you, so a per-user Node install (e.g. nvm)
+stays on `PATH`; only the writes into the root-owned install dir elevate via
+`sudo` (you'll be prompted once). Override the install location with
+`CLAUDE_DESKTOP_DIR=/path/to/app`.
+
+Requirements: a Linux Claude Desktop install, Node.js 22+, and `sudo` rights.
+Native modules (`*.node`) are re-marked as unpacked during repack with
+`--unpack '{**/*.node,**/spawn-helper}'` so the app still loads them.
+
+**Stays patched across updates:** a Claude update replaces `app.asar` and wipes
+the patch, so a **systemd system timer** (`claude-linux-rtl.timer`, on by
+default; `--no-auto-update` to skip) re-applies it when the installed `app.asar`
+changes (it compares SHA-256, so it's version-agnostic). `--restore` removes the
+timer too.
+
+**Two kinds of "new window" (right-click menu):** Claude Desktop is
+one-window-per-profile, so no single new window can have *both* your shared Cowork
+history *and* your MCP connectors. The menu offers both:
+
+- **חלון חדש (היסטוריה משותפת)** — in-process, like Windows/macOS: already logged
+  in and shares your Cowork history. MCP connectors are *not* available in it
+  (the app only wires connectors into windows it manages itself). The floating
+  **+חלון** button uses this mode.
+- **חלון חדש (עם connectors)** — a separate instance (the launcher's
+  `--new-window`): your connectors work, but its Cowork history starts blank
+  (separate profile).
+
+On `claude-desktop-debian` builds the patcher also fixes the launcher so opening
+that connectors window no longer closes your existing window. The launcher's own
+cleanup used to kill the primary's shared Cowork daemon when a second instance
+started; the patch keeps a secondary instance from touching the primary's
+resources. (These launcher scripts are root-owned and live outside the asar, so
+the patch backs them up and re-applies via the auto-update watcher after a
+Claude update.) **Translate to Hebrew** is best-effort here as well.
+
 ## Claude Code in VS Code (auto-RTL)
 
 A separate, much lighter patcher adds **automatic Hebrew RTL** to the **Claude
@@ -141,10 +202,10 @@ payloads (`src/vscode-rtl-inject.js` / `.css`) between sentinel comments and
 restores from `*.bak` before every re-patch. **No Administrator / sudo needed.**
 
 ```bash
-# macOS (verified):
+# macOS (verified) & Linux — the same script:
 ./patch-claude-code-vscode.sh                  # install (prompts first)
 ./patch-claude-code-vscode.sh --restore        # revert
-./patch-claude-code-vscode.sh --no-auto-update # skip the re-patch LaunchAgent
+./patch-claude-code-vscode.sh --no-auto-update # skip the re-patch watcher
 ```
 
 ```powershell
@@ -165,9 +226,13 @@ no knowledge of the webview's hashed class names, so it survives extension updat
 
 **Stays applied across updates:** the extension auto-updates into a fresh,
 versioned folder that wipes the patch, so a launchd LaunchAgent (macOS) /
-Scheduled Task (Windows) re-applies it automatically — on by default
-(`--no-auto-update` / `-NoAutoUpdate` to skip). You still reload the window once
-after an automatic re-patch.
+systemd `--user` timer (Linux) / Scheduled Task (Windows) re-applies it
+automatically — on by default (`--no-auto-update` / `-NoAutoUpdate` to skip).
+You still reload the window once after an automatic re-patch.
+
+> The Linux Claude Desktop release tarball (from `package-linux.sh`) bundles
+> this VS Code patcher too, so one download covers both the desktop app and the
+> Claude Code sidebar.
 
 ## Repository layout
 
@@ -176,11 +241,14 @@ patch-claude-windows.ps1     Windows patcher (Install / Restore / auto-update)
 package-windows.ps1          builds the Windows ZIP under dist\
 patch-claude-macos.sh        macOS patcher (install / --restore / auto-update)
 package-macos.sh             builds the macOS tar.gz under dist/
+patch-claude-linux.sh        Linux patcher (install / --restore / auto-update)
+package-linux.sh             builds the Linux tar.gz under dist/
 patch-claude-code-vscode.sh  Claude Code VS Code auto-RTL patcher (macOS)
 patch-claude-code-vscode.ps1 Claude Code VS Code auto-RTL patcher (Windows)
 src/
-  win-entry.js / win-wrapper.js   Windows entry + web-contents hook
-  mac-entry.js / mac-wrapper.js   macOS entry + web-contents hook
+  win-entry.js / win-wrapper.js     Windows entry + web-contents hook
+  mac-entry.js / mac-wrapper.js     macOS entry + web-contents hook
+  linux-entry.js / linux-wrapper.js Linux entry + web-contents hook
   rtl-support.js             RTL CSS/JS (shared, origin: claude-desktop-linux)
   translate-support.js       translate-to-Hebrew (main-process; shared)
   multi-instance-support.js  floating "new window" button (shared)
@@ -199,6 +267,12 @@ powershell -ExecutionPolicy Bypass -File .\package-windows.ps1 -Version 1.0.0
 # macOS
 ./package-macos.sh --version 1.0.0
 # -> dist/claude-desktop-macos-rtl-v1.0.0.tar.gz
+```
+
+```bash
+# Linux
+./package-linux.sh --version 1.0.0
+# -> dist/claude-desktop-linux-rtl-v1.0.0.tar.gz
 ```
 
 ## Caveats
