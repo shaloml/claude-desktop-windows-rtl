@@ -8,10 +8,12 @@
 # CSS guard) between sentinel comments. Result: Hebrew paragraphs flip to RTL and
 # right-align on their own, English and code stay LTR. No toggle, fully automatic.
 #
-# Sibling of patch-claude-macos.sh; same idempotency model (back up the originals
-# to *.bak on first run, restore-from-bak before every re-patch) and the same
-# auto-re-patch idea (a launchd LaunchAgent re-applies after the extension
-# auto-updates into a fresh, pristine folder).
+# Runs on macOS AND Linux — the webview files sit at the same relative path under
+# ~/.vscode/extensions on both. Same idempotency model (back up the originals to
+# *.bak on first run, restore-from-bak before every re-patch) and the same
+# auto-re-patch idea (re-applies after the extension auto-updates into a fresh,
+# pristine folder) — via a launchd LaunchAgent on macOS, a systemd --user timer
+# on Linux. (Windows uses patch-claude-code-vscode.ps1.)
 #
 # Usage:
 #   ./patch-claude-code-vscode.sh                  # install (prompts first)
@@ -26,8 +28,17 @@
 set -u
 
 # --- config -----------------------------------------------------------------
-STATE_DIR="$HOME/Library/Application Support/ClaudeCodeVscodeRtl"
-PLIST_LABEL='com.shaloml.claude-code-vscode-rtl.autopatch'
+# Cross-platform (macOS + Linux). The Claude Code webview files live at the same
+# relative path under ~/.vscode/extensions on both; only the state dir and the
+# auto-re-patch mechanism (launchd on macOS / systemd --user on Linux) differ.
+OS="$(uname)"
+case "$OS" in
+	Darwin) STATE_DIR="$HOME/Library/Application Support/ClaudeCodeVscodeRtl" ;;
+	Linux)  STATE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/claude-code-vscode-rtl" ;;
+	*)      STATE_DIR='' ;;   # unsupported; validated in the dispatcher below
+esac
+PLIST_LABEL='com.shaloml.claude-code-vscode-rtl.autopatch'   # macOS launchd label
+SERVICE_NAME='claude-code-vscode-rtl'                        # Linux systemd --user unit
 SENTINEL_BEGIN='/* >>> claude-code-rtl (auto) >>> */'
 SENTINEL_END='/* <<< claude-code-rtl (auto) <<< */'
 
@@ -65,6 +76,17 @@ confirm() {
 	[[ -z "$ans" || "$ans" =~ ^[Yy]([Ee][Ss])?$ ]]
 }
 
+# Portable file mtime (epoch seconds). Must branch on OS, NOT chain `stat -f ||
+# stat -c`: on Linux `stat -f %m` is "filesystem mode", which prints a multi-line
+# fs summary to stdout for the real operand before failing — that junk would leak
+# into the captured value and break the numeric comparison in find_ext_dir.
+file_mtime() {
+	case "$OS" in
+		Darwin) stat -f %m "$1" 2>/dev/null || echo 0 ;;
+		*)      stat -c %Y "$1" 2>/dev/null || echo 0 ;;
+	esac
+}
+
 # --- locate the Claude Code extension ---------------------------------------
 # Search the editors that can host it; pick the most recently modified install
 # that actually has a webview (so during an update we patch the NEW folder).
@@ -80,7 +102,7 @@ find_ext_dir() {
 		[[ -d "$root" ]] || continue
 		for d in "$root"/anthropic.claude-code-*; do
 			[[ -f "$d/webview/index.js" && -f "$d/webview/index.css" ]] || continue
-			t=$(stat -f %m "$d" 2>/dev/null || echo 0)
+			t=$(file_mtime "$d")
 			if [[ "$t" -ge "$best_t" ]]; then best_t="$t"; best="$d"; fi
 		done
 	done
@@ -197,9 +219,24 @@ save_stable_bundle() {
 }
 
 # =============================================================================
-# AUTO-UPDATE (launchd LaunchAgent)
+# AUTO-UPDATE (launchd LaunchAgent on macOS / systemd --user timer on Linux)
 # =============================================================================
 enable_auto_update() {
+	case "$OS" in
+		Darwin) enable_auto_update_macos ;;
+		Linux)  enable_auto_update_linux ;;
+	esac
+}
+
+disable_auto_update() {
+	step 'Disabling auto-re-patch...'
+	case "$OS" in
+		Darwin) disable_auto_update_macos ;;
+		Linux)  disable_auto_update_linux ;;
+	esac
+}
+
+enable_auto_update_macos() {
 	step 'Enabling auto-re-patch (LaunchAgent)...'
 	local agent_dir="$HOME/Library/LaunchAgents"
 	local plist="$agent_dir/$PLIST_LABEL.plist"
@@ -269,11 +306,103 @@ PLIST
 	fi
 }
 
-disable_auto_update() {
-	step 'Disabling auto-re-patch...'
+disable_auto_update_macos() {
 	local plist="$HOME/Library/LaunchAgents/$PLIST_LABEL.plist"
 	launchctl unload "$plist" 2>/dev/null
 	rm -f "$plist"
+	ok 'Auto-re-patch disabled.'
+}
+
+# --- Linux auto-re-patch (systemd --user timer) -----------------------------
+# The webview files are user-owned, so no root is needed — a per-user systemd
+# timer re-applies the injection after the extension updates into a fresh folder.
+enable_auto_update_linux() {
+	step 'Enabling auto-re-patch (systemd --user timer)...'
+	if ! command -v systemctl >/dev/null 2>&1; then
+		warn 'systemctl not found; skipping auto-re-patch. Re-run after an extension update.'
+		return 0
+	fi
+	local watcher="$STATE_DIR/watcher.sh"
+	local unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+	mkdir -p "$unit_dir" "$STATE_DIR"
+
+	# STATE_DIR is interpolated in; all runtime $-expansions are escaped (\$).
+	cat > "$watcher" <<WATCHER
+#!/usr/bin/env bash
+# Auto-re-patch watcher: re-applies auto-RTL after the Claude Code extension
+# updates into a fresh folder (or if VS Code restores the webview files).
+set -u
+state="$STATE_DIR"
+patcher="\$state/app/patch-claude-code-vscode.sh"
+log="\$state/watcher.log"
+sentinel='/* >>> claude-code-rtl (auto) >>> */'
+file_mtime() { stat -c %Y "\$1" 2>/dev/null || echo 0; }
+find_ext_dir() {
+	local roots=(
+		"\$HOME/.vscode/extensions" "\$HOME/.vscode-insiders/extensions"
+		"\$HOME/.cursor/extensions" "\$HOME/.windsurf/extensions"
+	)
+	local best='' best_t=0 root d t
+	for root in "\${roots[@]}"; do
+		[[ -d "\$root" ]] || continue
+		for d in "\$root"/anthropic.claude-code-*; do
+			[[ -f "\$d/webview/index.js" ]] || continue
+			t=\$(file_mtime "\$d")
+			[[ "\$t" -ge "\$best_t" ]] && { best_t="\$t"; best="\$d"; }
+		done
+	done
+	[[ -n "\$best" ]] && printf '%s' "\$best"
+}
+cur=\$(find_ext_dir)
+[[ -z "\$cur" ]] && { echo "\$(date) no extension found" >>"\$log"; exit 0; }
+recorded=\$(sed -n 's/.*"patchedExtPath":"\([^"]*\)".*/\1/p' "\$state/state.json" 2>/dev/null)
+if [[ "\$cur" == "\$recorded" ]] && grep -qF "\$sentinel" "\$cur/webview/index.js" 2>/dev/null; then
+	exit 0
+fi
+echo "\$(date) re-patching (\$recorded -> \$cur)" >>"\$log"
+/bin/bash "\$patcher" --yes --no-auto-update >>"\$log" 2>&1
+WATCHER
+	chmod +x "$watcher"
+
+	cat > "$unit_dir/$SERVICE_NAME.service" <<SERVICE
+[Unit]
+Description=Re-apply Claude Code VS Code auto-RTL after an extension update
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash $watcher
+SERVICE
+
+	cat > "$unit_dir/$SERVICE_NAME.timer" <<TIMER
+[Unit]
+Description=Periodic check to re-apply Claude Code VS Code auto-RTL
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=3h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+TIMER
+
+	systemctl --user daemon-reload 2>/dev/null
+	if systemctl --user enable --now "$SERVICE_NAME.timer" 2>/dev/null; then
+		ok "Auto-re-patch enabled ($SERVICE_NAME.timer, systemd --user)."
+		log "Watcher log: $STATE_DIR/watcher.log"
+		warn 'After an auto-re-patch you still need to reload the VS Code window once.'
+	else
+		warn 'Could not enable the systemd --user timer (no user session bus?).'
+	fi
+}
+
+disable_auto_update_linux() {
+	if command -v systemctl >/dev/null 2>&1; then
+		systemctl --user disable --now "$SERVICE_NAME.timer" 2>/dev/null
+	fi
+	local unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+	rm -f "$unit_dir/$SERVICE_NAME.service" "$unit_dir/$SERVICE_NAME.timer"
+	command -v systemctl >/dev/null 2>&1 && systemctl --user daemon-reload 2>/dev/null
 	ok 'Auto-re-patch disabled.'
 }
 
@@ -294,7 +423,7 @@ restore_patch() {
 }
 
 # =============================================================================
-[[ "$(uname)" == 'Darwin' ]] || die 'This patcher targets macOS VS Code installs.'
+[[ -n "$STATE_DIR" ]] || die "Unsupported OS: $OS (this patcher targets macOS and Linux)."
 
 case "$ACTION" in
 	install)             install_patch ;;
