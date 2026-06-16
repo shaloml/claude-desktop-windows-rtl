@@ -1,9 +1,10 @@
-# Claude Desktop — Windows & macOS RTL & extensions patch — dev notes
+# Claude Desktop — Windows, macOS & Linux RTL & extensions patch — dev notes
 
 In-place patchers that inject RTL + extensions into the **official Claude
-Desktop**: Windows (Microsoft Store / MSIX build) via PowerShell, and macOS
-(`/Applications/Claude.app`) via a bash script. Read this before making
-non-trivial changes.
+Desktop**: Windows (Microsoft Store / MSIX build) via PowerShell, macOS
+(`/Applications/Claude.app`) via a bash script, and Linux
+(`/usr/lib/claude-desktop`, claude-desktop-debian layout) via a bash script.
+Read this before making non-trivial changes.
 
 ## Platforms
 
@@ -22,10 +23,74 @@ non-trivial changes.
   downloads, so a patched app won't auto-update. `asar pack` MUST pass
   `--unpack "{*.node,spawn-helper}"` or the native modules get packed into the
   asar and the app crashes at startup.
-- **Claude Code (VS Code extension):** `patch-claude-code-vscode.sh` (macOS) +
-  `patch-claude-code-vscode.ps1` (Windows), both feeding the shared
-  `src/vscode-rtl-inject.{js,css}` payloads. Verified on macOS. A different, far
-  lighter target than Claude Desktop: the extension's sidebar is a plain webview
+- **Linux:** `patch-claude-linux.sh` + `src/linux-entry.js` / `linux-wrapper.js`.
+  Core asar inject dry-run-verified against the installed claude-desktop-debian
+  build (Ubuntu, v1.12603.1); full apply-and-click verification still pending on
+  a vanilla build. By far the simplest target: the Electron binary ships with the
+  asar-integrity fuses OFF (`EnableEmbeddedAsarIntegrityValidation` /
+  `OnlyLoadAppFromAsar` both Disabled) and is unsigned, so there is NO hash to
+  patch and NO re-signing — it's the macOS flow minus Phase 2 (integrity) and
+  Phase 3 (codesign). App files under `/usr/lib/claude-desktop` are root-owned,
+  so privileged writes go through per-operation `sudo` — run as your NORMAL user
+  (not under sudo) so `npx`/Node stay on PATH; the heavy lifting (asar
+  extract/pack) runs as you and only the writes into the install dir elevate.
+  Two Linux-specific gotchas, both found the hard way: (1) `asar pack` MUST use
+  `--unpack "{**/*.node,**/spawn-helper}"` — the natives are NESTED
+  (`node_modules/.../*.node`), so a bare `*.node` (what the Win/mac globs use)
+  matches nothing and silently packs them in, crashing startup; the upstream
+  build packs with `**/*.node`. (2) `asar extract` reads the sibling
+  `app.asar.unpacked/` dir, so ALWAYS extract from the real install path — never
+  a lone copy of `app.asar` (extract then dies ENOENT on the natives, and the
+  "Node.js vX" line printed is a crash banner, not info). Auto-re-patch is a
+  systemd SYSTEM timer (`claude-linux-rtl.timer`, root, boot + every 3h) that
+  re-applies from a stable copy when the installed `app.asar`'s SHA-256 differs
+  from the recorded patched SHA — version-agnostic and needs no Node in the
+  watcher (state is a sourceable `state.env`, not JSON). **"New window" — TWO
+  flavors, because the app is one-window-per-profile.** `app.on('second-instance')`
+  only focuses the existing window, and an externally-created `BrowserWindow` is
+  "unknown" to the app's internal `<Window>` pool — so MCP connectors only wire
+  into windows the app itself manages. There is no single window that has BOTH
+  shared Cowork AND connectors; `linux-wrapper.js` exposes both as menu items: (1)
+  IN-PROCESS `openNewWindow()` — a `new BrowserWindow` in this process sharing the
+  session/user-data-dir → shared Cowork history, but no MCP connectors; (2)
+  SEPARATE INSTANCE `multiInstance.openNewInstance()` — the launcher's
+  `--new-window`, a separate `Claude-instance-N` profile the app fully manages →
+  MCP connectors work, Cowork starts blank. The floating button uses #1. Both are
+  debounced (~1.5s). The in-process button emits a PRIVATE trigger
+  (`NEW_WINDOW_TRIGGER`), NOT the shared `multi-instance-support.js`
+  `CONSOLE_TRIGGER`, so the host `frame-fix-wrapper`'s bridge doesn't ALSO spawn a
+  separate process (that double-fire was the earlier "new window closes the other"
+  bug). (Reusing the content view's `preload` via `getLastWebPreferences()` was
+  tried to get MCP into the in-process window — it did NOT work; the app gates MCP
+  on its own window management, not just the preload.) We do NOT defer to the host
+  (an earlier deferral removed the RTL/button that only OUR wrapper reliably
+  renders on this build). **Failure-safe + upgrade-safe install:** the patcher
+  extracts the CURRENT live asar into a temp dir, injects, repacks, and writes the
+  live asar exactly ONCE at the end — so a mid-run failure (npx hiccup, declined
+  sudo, Ctrl-C) leaves the running app untouched, and re-patching the live (NOT a
+  stale `.bak`) stays correct after a Claude update replaced the asar (the
+  package.json rewrite is a no-op when `main` is already our entry). **Launcher
+  fix (root-owned, outside the asar):** the connectors window (#2 above) is a
+  secondary `--new-window` instance; the claude-desktop-debian launcher ran its
+  cleanup functions for that secondary, killing the PRIMARY's shared
+  cowork-vm-service daemon and closing the running window. `patch_launcher`
+  text-patches `/usr/bin/claude-desktop` (guard the pre-launch cleanups on
+  `new_instance==false`) and `launcher-common.sh` (short-circuit
+  `cleanup_after_electron_exit` when `CLAUDE_SECONDARY_INSTANCE` is set) so a
+  secondary never cleans up the primary's resources. It patches the LIVE files
+  idempotently (marker-guarded), round-trips exactly on `--restore`, and is
+  skipped on a vanilla build with no launcher. These files are NOT part of the
+  asar and are wiped by `apt upgrade` — the watcher re-applies them on its next
+  run (it re-runs the whole patcher).
+- **Claude Code (VS Code extension):** `patch-claude-code-vscode.sh`
+  (macOS + Linux, one cross-platform script — branches on `uname` for the state
+  dir, `stat` flavor, and watcher) + `patch-claude-code-vscode.ps1` (Windows),
+  both feeding the shared `src/vscode-rtl-inject.{js,css}` payloads. Verified on
+  macOS; Linux auto-update path dry-run-verified. The Linux Claude Desktop
+  release (`package-linux.sh`) bundles this patcher + its two payloads, so one
+  tarball covers both the desktop app and the Claude Code sidebar. A different,
+  far lighter target than Claude Desktop: the extension's sidebar is a plain
+  webview
   (`<ext>/webview/index.js` + `index.css`) — no asar, no integrity hash, no
   code-signing, user-owned files. The patcher just appends the two payloads
   between sentinel comments and restores from `*.bak` before each re-patch (same
@@ -34,12 +99,13 @@ non-trivial changes.
   `dir="rtl"`/`"ltr"` **stickily** (locks per element, never re-evaluates). Do NOT
   use `dir="auto"` — the browser re-evaluates it live, so while a response streams
   the first strong char keeps changing and paragraphs oscillate left/right
-  (eye-searing flicker). A launchd LaunchAgent (macOS) / Scheduled Task (Windows)
-  re-applies after the extension auto-updates into a fresh versioned folder; the
-  watcher is on by default (pass `--no-auto-update` / `-NoAutoUpdate` to skip).
+  (eye-searing flicker). A launchd LaunchAgent (macOS) / systemd `--user` timer
+  (Linux) / Scheduled Task (Windows) re-applies after the extension auto-updates
+  into a fresh versioned folder; the watcher is on by default (pass
+  `--no-auto-update` / `-NoAutoUpdate` to skip).
   After any (re)patch the webview must be reloaded once: VS Code "Developer:
   Reload Window".
-- **Shared (both):** `rtl-support.js`, `translate-support.js`,
+- **Shared (all three):** `rtl-support.js`, `translate-support.js`,
   `multi-instance-support.js`, and the in-process "new window" approach. Fix a
   platform quirk in the platform `*-wrapper.js`, never in the shared modules.
 
