@@ -11,3 +11,6 @@ Desktop.ini
 # Local temp / logs
 *.log
 *.bak
+
+# Orchestration run artifacts
+.a5c/
