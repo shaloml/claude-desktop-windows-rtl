@@ -82,42 +82,15 @@ Read this before making non-trivial changes.
   skipped on a vanilla build with no launcher. These files are NOT part of the
   asar and are wiped by `apt upgrade` — the watcher re-applies them on its next
   run (it re-runs the whole patcher).
-- **Claude Code (VS Code extension):** `patch-claude-code-vscode.sh`
-  (macOS + Linux, one cross-platform script — branches on `uname` for the state
-  dir, `stat` flavor, and watcher) + `patch-claude-code-vscode.ps1` (Windows),
-  both feeding the shared `src/vscode-rtl-inject.{js,css}` payloads. Verified on
-  macOS; Linux auto-update path dry-run-verified. The Linux Claude Desktop
-  release (`package-linux.sh`) bundles this patcher + its two payloads, so one
-  tarball covers both the desktop app and the Claude Code sidebar. A different,
-  far lighter target than Claude Desktop: the extension's sidebar is a plain
-  webview
-  (`<ext>/webview/index.js` + `index.css`) — no asar, no integrity hash, no
-  code-signing, user-owned files. The patcher just appends the two payloads
-  between sentinel comments and restores from `*.bak` before each re-patch (same
-  idempotency model as the others). RTL here has **three modes**, chosen from a
-  small floating, draggable panel pinned at the top of the webview (position +
-  mode persisted in `localStorage`): **AUTO** (default), **RTL**, **LTR**. AUTO is
-  the original behaviour — the JS computes each text block's direction from its
-  first strong character and pins `dir="rtl"`/`"ltr"` **stickily** (locks per
-  element, never re-evaluates). Do NOT use `dir="auto"` — the browser re-evaluates
-  it live, so while a response streams the first strong char keeps changing and
-  paragraphs oscillate left/right (eye-searing flicker). **RTL/LTR force one
-  direction across the WHOLE webview** by tagging `<html data-claude-rtl-mode>`;
-  the CSS drives direction from the root (covering chat, composer, tool rows,
-  diffs), while `pre`/`code`/Monaco stay LTR because a direct rule on the element
-  beats the inherited direction. This forced override is the escape hatch for the
-  cases AUTO gets wrong (a mostly-Hebrew paragraph that *starts* with English or
-  inline code, which AUTO would lock to LTR). Switching to a forced mode runs
-  `clearOurMarks()` to strip the per-element `dir`/gutter attributes AUTO set (an
-  element `dir` would otherwise beat the inherited root direction); switching back
-  to AUTO re-sweeps. AUTO's first-strong heuristic is left unchanged on purpose —
-  a "majority of strong chars" rule would reintroduce the streaming oscillation —
-  the forced buttons are the fix instead. A launchd LaunchAgent (macOS) / systemd `--user` timer
-  (Linux) / Scheduled Task (Windows) re-applies after the extension auto-updates
-  into a fresh versioned folder; the watcher is on by default (pass
-  `--no-auto-update` / `-NoAutoUpdate` to skip).
-  After any (re)patch the webview must be reloaded once: VS Code "Developer:
-  Reload Window".
+- **Claude Code (VS Code extension): MOVED OUT.** RTL for the Claude Code VS Code
+  extension now lives in its own repo,
+  [`vscode-claude-rtl`](https://github.com/shaloml/vscode-claude-rtl) — a proper
+  installable VS Code extension (TypeScript) plus standalone `install/*.{sh,ps1}`
+  patchers, published to Open VSX / as a VSIX. The shared payloads
+  (`src/vscode-rtl-inject.{js,css}`) and the `patch-claude-code-vscode.{sh,ps1}`
+  scripts that used to live here were removed from this repo and the desktop
+  packagers no longer bundle them. Do NOT re-add VS Code RTL here — send those
+  changes to the `vscode-claude-rtl` repo instead.
 - **Shared (all three):** `rtl-support.js`, `translate-support.js`,
   `multi-instance-support.js`, and the in-process "new window" approach. Fix a
   platform quirk in the platform `*-wrapper.js`, never in the shared modules.
