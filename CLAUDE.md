@@ -94,12 +94,25 @@ Read this before making non-trivial changes.
   (`<ext>/webview/index.js` + `index.css`) — no asar, no integrity hash, no
   code-signing, user-owned files. The patcher just appends the two payloads
   between sentinel comments and restores from `*.bak` before each re-patch (same
-  idempotency model as the others). RTL here is **automatic, no toggle**: the JS
-  computes each text block's direction from its first strong character and pins
-  `dir="rtl"`/`"ltr"` **stickily** (locks per element, never re-evaluates). Do NOT
-  use `dir="auto"` — the browser re-evaluates it live, so while a response streams
-  the first strong char keeps changing and paragraphs oscillate left/right
-  (eye-searing flicker). A launchd LaunchAgent (macOS) / systemd `--user` timer
+  idempotency model as the others). RTL here has **three modes**, chosen from a
+  small floating, draggable panel pinned at the top of the webview (position +
+  mode persisted in `localStorage`): **AUTO** (default), **RTL**, **LTR**. AUTO is
+  the original behaviour — the JS computes each text block's direction from its
+  first strong character and pins `dir="rtl"`/`"ltr"` **stickily** (locks per
+  element, never re-evaluates). Do NOT use `dir="auto"` — the browser re-evaluates
+  it live, so while a response streams the first strong char keeps changing and
+  paragraphs oscillate left/right (eye-searing flicker). **RTL/LTR force one
+  direction across the WHOLE webview** by tagging `<html data-claude-rtl-mode>`;
+  the CSS drives direction from the root (covering chat, composer, tool rows,
+  diffs), while `pre`/`code`/Monaco stay LTR because a direct rule on the element
+  beats the inherited direction. This forced override is the escape hatch for the
+  cases AUTO gets wrong (a mostly-Hebrew paragraph that *starts* with English or
+  inline code, which AUTO would lock to LTR). Switching to a forced mode runs
+  `clearOurMarks()` to strip the per-element `dir`/gutter attributes AUTO set (an
+  element `dir` would otherwise beat the inherited root direction); switching back
+  to AUTO re-sweeps. AUTO's first-strong heuristic is left unchanged on purpose —
+  a "majority of strong chars" rule would reintroduce the streaming oscillation —
+  the forced buttons are the fix instead. A launchd LaunchAgent (macOS) / systemd `--user` timer
   (Linux) / Scheduled Task (Windows) re-applies after the extension auto-updates
   into a fresh versioned folder; the watcher is on by default (pass
   `--no-auto-update` / `-NoAutoUpdate` to skip).

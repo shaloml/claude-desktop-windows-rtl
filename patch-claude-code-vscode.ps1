@@ -6,8 +6,12 @@
     as a plain webview — <ext>\webview\index.js + index.css on disk, no asar, no
     integrity hash, no code-signing, owned by the user. So this patcher just
     appends two shared payloads (src\vscode-rtl-inject.js / .css) between sentinel
-    comments. Result: Hebrew paragraphs flip to RTL and right-align on their own;
-    English and code stay LTR. No toggle, fully automatic.
+    comments. Result: a small floating, draggable AUTO / RTL / LTR panel at the top
+    of the webview. AUTO (default) flips each paragraph to RTL/LTR on its own first
+    strong character (English and code stay LTR); RTL/LTR force one direction across
+    the whole webview while code/editors stay LTR. Mode + panel position persist in
+    localStorage. The payloads are shared with the macOS/Linux patcher, so this
+    script needs no per-machine editing — it auto-discovers the extension.
 
     Unlike patch-claude-windows.ps1 this needs NO Administrator rights (the files
     live under %USERPROFILE%). Idempotent: backs up the originals to *.bak on the
