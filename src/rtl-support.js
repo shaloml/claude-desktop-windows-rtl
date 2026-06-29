@@ -140,6 +140,11 @@ const RTL_CSS = `
     direction: ltr;
     user-select: none;
     -webkit-user-select: none;
+    /* The app's custom title bar marks the top strip as an OS window-drag region
+       (-webkit-app-region: drag), which otherwise swallows clicks/drag on the
+       panel (seen on Windows; harmless elsewhere). Opt the panel back out. */
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
   }
   #claude-rtl-panel .ccr-grip {
     cursor: move;
