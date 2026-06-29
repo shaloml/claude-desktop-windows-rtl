@@ -362,6 +362,18 @@ save_shortcut() {
 	SH
 	chmod +x "$launcher"
 
+	# Resolve + stash the bundled icon (PNG) so the .desktop can point at a stable
+	# path; fall back to a themed name if it isn't shipped.
+	local icon_val='claude-desktop'
+	local script_dir; script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+	local c
+	for c in "$script_dir/media/icon128.png" "$script_dir/icon128.png"; do
+		if [[ -f "$c" ]]; then
+			if cp "$c" "$data_dir/icon.png" 2>/dev/null; then icon_val="$data_dir/icon.png"; fi
+			break
+		fi
+	done
+
 	local desk; desk=$(desktop_dir)
 	mkdir -p "$desk" || return 0
 	local dfile="$desk/$SHORTCUT_NAME"
@@ -372,7 +384,7 @@ save_shortcut() {
 		Comment=Re-apply the Hebrew RTL patch after Claude Desktop updates
 		Exec=$launcher
 		Terminal=true
-		Icon=claude-desktop
+		Icon=$icon_val
 		Categories=Utility;
 	DESK
 	chmod +x "$dfile"
@@ -385,6 +397,7 @@ remove_shortcut() {
 	[[ $EUID -eq 0 ]] && return 0
 	rm -f "$(desktop_dir)/$SHORTCUT_NAME" 2>/dev/null || true
 	rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/claude-linux-rtl/repatch.sh" 2>/dev/null || true
+	rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/claude-linux-rtl/icon.png" 2>/dev/null || true
 }
 
 # =============================================================================

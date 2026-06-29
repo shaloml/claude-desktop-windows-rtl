@@ -169,6 +169,18 @@ const RTL_CSS = `
     background: #2f6feb;
     color: #fff;
   }
+  #claude-rtl-panel .ccr-sep {
+    width: 1px;
+    height: 16px;
+    margin: 0 2px;
+    background: rgba(255, 255, 255, 0.18);
+  }
+  /* The "+window" action now lives inside the panel — hide the standalone
+     floating new-window buttons (multi-instance on win/mac, our own on Linux). */
+  #claude-new-instance-floating-btn,
+  #claude-rtl-newwindow-btn {
+    display: none !important;
+  }
 `;
 
 const RTL_JS = `(function() {
@@ -497,6 +509,29 @@ const RTL_JS = `(function() {
     return b;
   }
 
+  // Open a new window via whichever global the platform wrapper exposed: Linux
+  // uses claudeOpenNewWindow (in-process), Windows/macOS use claudeOpenNewInstance.
+  function openNewWindow() {
+    try {
+      var fn = window.claudeOpenNewWindow || window.claudeOpenNewInstance;
+      if (typeof fn === 'function') fn();
+    } catch (e) {}
+  }
+
+  function makeActionBtn(label, title, onClick) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'ccr-btn';
+    b.textContent = label;
+    b.title = title;
+    b.addEventListener('click', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      onClick();
+    });
+    return b;
+  }
+
   function enableDrag(panel, grip) {
     var dragging = false, startX = 0, startY = 0, baseLeft = 0, baseTop = 0;
     grip.addEventListener('pointerdown', function(e) {
@@ -549,6 +584,12 @@ const RTL_JS = `(function() {
     panel.appendChild(btnAuto);
     panel.appendChild(btnRtl);
     panel.appendChild(btnLtr);
+
+    // "+window" action (opens a new window, same process / shared login).
+    var sep = document.createElement('span');
+    sep.className = 'ccr-sep';
+    panel.appendChild(sep);
+    panel.appendChild(makeActionBtn('+חלון', 'פתח חלון חדש', openNewWindow));
 
     var left = lsGet(LS_LEFT), top = lsGet(LS_TOP);
     if (left !== null && top !== null) {

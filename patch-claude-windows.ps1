@@ -549,6 +549,43 @@ function Save-StableBundle([hashtable]$Sources) {
 	foreach ($name in $Sources.Keys) {
 		Copy-Item $Sources[$name] (Join-Path $script:StableApp $name) -Force
 	}
+	# Stash the shortcut icon so the watcher's stable-copy re-patch can rebuild it.
+	$pngIcon = Resolve-IconPng
+	if ($pngIcon) { Copy-Item $pngIcon (Join-Path $script:StableApp 'icon128.png') -Force }
+}
+
+# Resolve the bundled shortcut icon (PNG): repo media\, or flat beside the script
+# (release bundle / the stashed stable copy). Returns $null if not shipped.
+function Resolve-IconPng {
+	$src = if ($SourceDir) { $SourceDir } else { $PSScriptRoot }
+	foreach ($c in @((Join-Path $src 'media\icon128.png'), (Join-Path $src 'icon128.png'))) {
+		if (Test-Path $c) { return $c }
+	}
+	return $null
+}
+
+# Wrap a PNG in a minimal .ico (Windows Vista+ renders PNG-compressed icons), so a
+# .lnk can use the project PNG without a separate .ico asset.
+function ConvertTo-Ico([string]$PngPath, [string]$IcoPath) {
+	$png = [IO.File]::ReadAllBytes($PngPath)
+	$ms = New-Object System.IO.MemoryStream
+	$bw = New-Object System.IO.BinaryWriter($ms)
+	try {
+		$bw.Write([uint16]0)            # reserved
+		$bw.Write([uint16]1)            # type: 1 = icon
+		$bw.Write([uint16]1)            # image count
+		$bw.Write([byte]128)           # width  (icon128.png is 128x128)
+		$bw.Write([byte]128)           # height
+		$bw.Write([byte]0)             # palette size
+		$bw.Write([byte]0)             # reserved
+		$bw.Write([uint16]1)           # color planes
+		$bw.Write([uint16]32)          # bits per pixel
+		$bw.Write([uint32]$png.Length) # image data size
+		$bw.Write([uint32]22)          # offset = 6 (dir) + 16 (entry)
+		$bw.Write($png)
+		$bw.Flush()
+		[IO.File]::WriteAllBytes($IcoPath, $ms.ToArray())
+	} finally { $bw.Dispose(); $ms.Dispose() }
 }
 
 # --- re-patch desktop shortcut ----------------------------------------------
@@ -568,7 +605,13 @@ function Save-Shortcut {
 		$sc.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$patcher`" -Action Install -Yes"
 		$sc.WorkingDirectory = $script:StableApp
 		$sc.Description = 'Re-apply the Claude Desktop Hebrew RTL patch (after a Claude update)'
+		# Prefer the project icon (PNG -> .ico); fall back to the PowerShell icon.
 		$sc.IconLocation = "$psExe,0"
+		$pngIcon = Resolve-IconPng
+		if ($pngIcon) {
+			$ico = Join-Path $script:StateDir 'repatch-icon.ico'
+			try { ConvertTo-Ico $pngIcon $ico; if (Test-Path $ico) { $sc.IconLocation = "$ico,0" } } catch { }
+		}
 		$sc.Save()
 		Write-Ok "Re-patch shortcut created ($lnk)"
 	} catch {

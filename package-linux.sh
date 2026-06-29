@@ -40,6 +40,8 @@ files=(
 	"rtl-support.js:$src_dir"
 	"translate-support.js:$src_dir"
 	"multi-instance-support.js:$src_dir"
+	# Icon for the re-patch desktop shortcut (flat, matches the patcher's fallback).
+	"icon128.png:$script_dir/media"
 )
 
 for entry in "${files[@]}"; do

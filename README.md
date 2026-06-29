@@ -48,14 +48,16 @@ The same Hebrew/Arabic RTL treatment is available on every Claude surface:
   direction automatically (Hebrew → RTL; English & code → LTR; no flicker while
   streaming); **RTL** forces the whole window right-to-left (sidebar moves right),
   code stays LTR; **LTR** is the baseline. Inline per-block LTR↔RTL buttons remain
-  on code / input / preview cards, plus a cycle item in the right-click menu.
+  on code / input / preview cards, plus a cycle item in the right-click menu. The
+  panel also carries a **+window** button to open a new window.
 - **Re-patch shortcut** — the first install drops a **"Re-apply Claude RTL"**
   shortcut on your Desktop; click it to re-apply after a Claude Desktop update
   (Windows / KDE & other Linux / macOS). The auto-update watcher still does this
   automatically too.
 - **Translate to Hebrew** — one-shot page translation from the right-click menu.
 - **New window** — opens another window in the same process, already logged in
-  (shares the session — no second login).
+  (shares the session — no second login). Available from the panel's **+window**
+  button or the right-click menu.
 - **Refresh page** and a **version label** (click to copy) in the right-click menu.
 
 ## Requirements
@@ -82,6 +84,26 @@ powershell -ExecutionPolicy Bypass -File .\patch-claude-windows.ps1 -Yes
 ```
 
 Re-run after every Claude Desktop auto-update (the update replaces the patch).
+
+## Staying patched after a Claude Desktop update
+
+A Claude Desktop update installs a fresh copy and removes the patch. Two things
+keep you covered:
+
+- **Automatic** — a per-platform watcher (Windows Scheduled Task / macOS launchd
+  LaunchAgent / Linux systemd timer) re-applies the patch on a schedule. It's
+  enabled on install by default (`--no-auto-update` / `-NoAutoUpdate` to skip).
+- **Manual, one click** — the first install also drops a **"Re-apply Claude RTL"**
+  shortcut **on your Desktop** (with this project's icon). Click it whenever you
+  want to re-apply immediately — e.g. right after an update, or if the watcher
+  hasn't run yet:
+  - **Windows** — a `.lnk` that runs the patcher; it self-elevates via UAC.
+  - **macOS** — a `.command` that opens Terminal (so any password prompt is visible).
+  - **Linux / KDE** — a `.desktop` that opens a terminal so the patcher's `sudo`
+    can prompt for your password.
+
+Both run the stashed stable copy of the patcher, so they work without the repo.
+The shortcut is removed by **Restore**.
 
 ## Uninstall / restore the original
 
