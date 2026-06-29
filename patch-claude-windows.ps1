@@ -596,22 +596,45 @@ function Save-Shortcut {
 	try {
 		$desktop = [Environment]::GetFolderPath('Desktop')
 		if (-not $desktop) { return }
-		$lnk = Join-Path $desktop 'Re-apply Claude RTL.lnk'
-		$patcher = Join-Path $script:StableApp 'patch-claude-windows.ps1'
-		$psExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-		$ws = New-Object -ComObject WScript.Shell
-		$sc = $ws.CreateShortcut($lnk)
-		$sc.TargetPath = $psExe
-		$sc.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$patcher`" -Action Install -Yes"
-		$sc.WorkingDirectory = $script:StableApp
-		$sc.Description = 'Re-apply the Claude Desktop Hebrew RTL patch (after a Claude update)'
-		# Prefer the project icon (PNG -> .ico); fall back to the PowerShell icon.
-		$sc.IconLocation = "$psExe,0"
+		if (-not (Test-Path $script:StateDir)) { New-Item -ItemType Directory -Path $script:StateDir -Force | Out-Null }
+
+		# A self-elevating .cmd that runs the patcher in ONE elevated window and
+		# pauses. A plain "powershell -File" shortcut self-elevates into a separate
+		# window that closes the instant it finishes, so success/errors flash by
+		# unread; this keeps the window open. %~dp0 is this file's folder, so
+		# %~dp0app\ is the stashed stable patcher.
+		$cmdPath = Join-Path $script:StateDir 'repatch.cmd'
+		$cmdBody = @"
+@echo off
+title Re-apply Claude RTL
+net session >nul 2>&1
+if %errorlevel% neq 0 (
+  echo Requesting Administrator privileges...
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+  exit /b
+)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0app\patch-claude-windows.ps1" -Action Install -Yes
+echo.
+echo === Done. Press any key to close this window. ===
+pause >nul
+"@
+		Set-Content -Path $cmdPath -Value $cmdBody -Encoding ascii
+
+		# Icon: project PNG -> embedded .ico, else the cmd.exe icon.
+		$icoLoc = (Join-Path $env:SystemRoot 'System32\cmd.exe') + ',0'
 		$pngIcon = Resolve-IconPng
 		if ($pngIcon) {
 			$ico = Join-Path $script:StateDir 'repatch-icon.ico'
-			try { ConvertTo-Ico $pngIcon $ico; if (Test-Path $ico) { $sc.IconLocation = "$ico,0" } } catch { }
+			try { ConvertTo-Ico $pngIcon $ico; if (Test-Path $ico) { $icoLoc = "$ico,0" } } catch { }
 		}
+
+		$lnk = Join-Path $desktop 'Re-apply Claude RTL.lnk'
+		$ws = New-Object -ComObject WScript.Shell
+		$sc = $ws.CreateShortcut($lnk)
+		$sc.TargetPath = $cmdPath
+		$sc.WorkingDirectory = $script:StateDir
+		$sc.Description = 'Re-apply the Claude Desktop Hebrew RTL patch (after a Claude update)'
+		$sc.IconLocation = $icoLoc
 		$sc.Save()
 		Write-Ok "Re-patch shortcut created ($lnk)"
 	} catch {
@@ -622,7 +645,10 @@ function Save-Shortcut {
 function Remove-Shortcut {
 	try {
 		$lnk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Re-apply Claude RTL.lnk'
-		if (Test-Path $lnk) { Remove-Item $lnk -Force; Write-Ok 'Re-patch shortcut removed' }
+		if (Test-Path $lnk) { Remove-Item $lnk -Force }
+		Remove-Item (Join-Path $script:StateDir 'repatch.cmd') -Force -ErrorAction SilentlyContinue
+		Remove-Item (Join-Path $script:StateDir 'repatch-icon.ico') -Force -ErrorAction SilentlyContinue
+		Write-Ok 'Re-patch shortcut removed'
 	} catch { }
 }
 
