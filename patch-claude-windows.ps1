@@ -551,6 +551,38 @@ function Save-StableBundle([hashtable]$Sources) {
 	}
 }
 
+# --- re-patch desktop shortcut ----------------------------------------------
+# A Desktop .lnk that re-applies the patch after a Claude Desktop update. It runs
+# the stable-copy patcher, which self-elevates via UAC, so no extra elevation flag
+# is needed. Idempotent (overwrites); Restore removes it.
+function Save-Shortcut {
+	try {
+		$desktop = [Environment]::GetFolderPath('Desktop')
+		if (-not $desktop) { return }
+		$lnk = Join-Path $desktop 'Re-apply Claude RTL.lnk'
+		$patcher = Join-Path $script:StableApp 'patch-claude-windows.ps1'
+		$psExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+		$ws = New-Object -ComObject WScript.Shell
+		$sc = $ws.CreateShortcut($lnk)
+		$sc.TargetPath = $psExe
+		$sc.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$patcher`" -Action Install -Yes"
+		$sc.WorkingDirectory = $script:StableApp
+		$sc.Description = 'Re-apply the Claude Desktop Hebrew RTL patch (after a Claude update)'
+		$sc.IconLocation = "$psExe,0"
+		$sc.Save()
+		Write-Ok "Re-patch shortcut created ($lnk)"
+	} catch {
+		Write-Warn2 "Could not create re-patch shortcut: $($_.Exception.Message)"
+	}
+}
+
+function Remove-Shortcut {
+	try {
+		$lnk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Re-apply Claude RTL.lnk'
+		if (Test-Path $lnk) { Remove-Item $lnk -Force; Write-Ok 'Re-patch shortcut removed' }
+	} catch { }
+}
+
 function Save-WatcherScript {
 	if (-not (Test-Path $script:StateDir)) {
 		New-Item -ItemType Directory -Path $script:StateDir -Force | Out-Null
@@ -871,6 +903,7 @@ function Install-Patch {
 		$ver = Get-ClaudeVersion
 		Save-PatchState $ver
 		try { Save-StableBundle $sources } catch { Write-Warn2 "Could not stash stable bundle: $($_.Exception.Message)" }
+		Save-Shortcut
 
 		Write-Host "`n=== PATCH COMPLETE ===`n" -ForegroundColor Green
 
@@ -940,6 +973,7 @@ function Restore-Patch {
 		if (Get-ScheduledTask -TaskName $script:TaskName -ErrorAction SilentlyContinue) {
 			Uninstall-AutoUpdateTask
 		}
+		Remove-Shortcut
 		Write-Host "`n=== Restore complete ===`n" -ForegroundColor Green
 	}
 }

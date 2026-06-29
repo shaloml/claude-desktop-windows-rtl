@@ -278,6 +278,7 @@ install_patch() {
 	mkdir -p "$STATE_DIR"
 	defaults_write_state "$app_dir"
 	save_stable_bundle "$src_dir"
+	save_shortcut
 
 	step 'Cleanup & launch'
 	open -a "$app_dir" 2>/dev/null && ok 'Claude launched.' || warn 'Launch manually.'
@@ -314,6 +315,29 @@ save_stable_bundle() {
 		cp "$src/$f" "$dst/$f"
 	done
 }
+
+# --- re-patch desktop shortcut ----------------------------------------------
+# A double-clickable .command on the Desktop that re-applies the patch after a
+# Claude update. .command opens in Terminal, so any sudo prompt is visible (the
+# mac patcher only elevates when the user doesn't own the bundle).
+MAC_SHORTCUT="$HOME/Desktop/Re-apply Claude RTL.command"
+
+save_shortcut() {
+	local desk="$HOME/Desktop"
+	[[ -d "$desk" ]] || mkdir -p "$desk" 2>/dev/null || return 0
+	local patcher="$STATE_DIR/app/patch-claude-macos.sh"
+	cat > "$MAC_SHORTCUT" <<-SH
+		#!/bin/bash
+		# Re-apply the Claude Desktop Hebrew RTL patch (after a Claude update).
+		"$patcher" --yes --no-auto-update
+		echo
+		read -n 1 -s -r -p "Press any key to close..."
+	SH
+	chmod +x "$MAC_SHORTCUT"
+	ok "Re-patch shortcut created ($MAC_SHORTCUT)"
+}
+
+remove_shortcut() { rm -f "$MAC_SHORTCUT" 2>/dev/null || true; }
 
 # =============================================================================
 # AUTO-UPDATE (launchd LaunchAgent)
@@ -395,6 +419,7 @@ restore_patch() {
 	[[ -f "$plist.bak" ]] && { cp -p "$plist.bak" "$plist"; ok 'Info.plist restored'; }
 	codesign --force --deep --sign - "$app_dir" 2>/dev/null && log 're-signed ad-hoc'
 	disable_auto_update
+	remove_shortcut
 	open -a "$app_dir" 2>/dev/null
 	printf '\n\033[32m=== Restore complete ===\033[0m\n\n'
 }
