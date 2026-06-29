@@ -51,7 +51,9 @@ $payload = @(
 	@{ Name = 'win-wrapper.js';             Dir = $srcDir },
 	@{ Name = 'rtl-support.js';             Dir = $srcDir },
 	@{ Name = 'translate-support.js';       Dir = $srcDir },
-	@{ Name = 'multi-instance-support.js';  Dir = $srcDir }
+	@{ Name = 'multi-instance-support.js';  Dir = $srcDir },
+	# Icon for the re-patch desktop shortcut (flat, matches the patcher's fallback).
+	@{ Name = 'icon128.png';                Dir = (Join-Path $scriptDir 'media') }
 )
 
 foreach ($p in $payload) {
