@@ -92,12 +92,12 @@ function openNewWindow() {
 // ---- injection + menu wiring (mirrors frame-fix-wrapper's contract) ----
 
 // Windows-only reposition: the shared rtl-support / multi-instance modules pin
-// their floating buttons at top:12px, which collides with the Windows window
-// controls (minimize/maximize/close) in the title-bar overlay at top-right.
-// Push both down ~50px. Injected as an override so the shared modules stay
-// untouched (Linux keeps its own positions).
+// the floating RTL panel (top-center) and the +window button near the top, which
+// can collide with the Windows title-bar overlay / window controls. Push them
+// down. Injected as an override so the shared modules stay untouched (Linux keeps
+// its own positions).
 const WIN_BUTTON_OFFSET_CSS = `
-	#claude-rtl-floating-toggle { top: 62px !important; }
+	#claude-rtl-panel { top: 46px !important; }
 	#claude-new-instance-floating-btn { top: 62px !important; }
 `;
 

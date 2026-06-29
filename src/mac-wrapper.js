@@ -92,11 +92,11 @@ function openNewWindow() {
 
 // ---- injection + menu wiring ----
 
-// macOS-only nudge: traffic lights are top-LEFT, so the top-RIGHT floating
-// buttons don't hit them. A small top offset just clears claude.ai's own
-// in-app topbar. Adjust after visual testing (0 is also fine if no overlap).
+// macOS-only nudge: traffic lights are top-LEFT, so the top-center RTL panel and
+// the top-RIGHT +window button don't hit them. A small top offset just clears
+// claude.ai's own in-app topbar. Adjust after visual testing.
 const MAC_BUTTON_OFFSET_CSS = `
-	#claude-rtl-floating-toggle { top: 40px !important; }
+	#claude-rtl-panel { top: 40px !important; }
 	#claude-new-instance-floating-btn { top: 40px !important; }
 `;
 

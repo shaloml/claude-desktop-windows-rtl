@@ -1,6 +1,18 @@
-// RTL (Right-to-Left) support for Claude Desktop
-// Gated by CLAUDE_RTL=1 environment variable
-// Adapted from the RTL ChatGPT browser extension
+// RTL (Right-to-Left) support for Claude Desktop (claude.ai web app).
+//
+// Lineage: adapted from the "Claude.ai RTL Transformer" browser extension
+// (https://github.com/shaloml/rtl-chatgpt). Injected into the renderer by the
+// platform wrappers (win/mac/linux) as RTL_CSS (<style>) + RTL_JS.
+//
+// Three modes, chosen from a small floating, draggable panel pinned at the top
+// (AUTO / RTL / LTR), persisted in localStorage (key: claude-rtl-mode):
+//   AUTO (default) — decide each message paragraph's direction from its first
+//     strong character and pin it once (locked) so streaming never flickers;
+//     English & code stay LTR. Sidebar/UI chrome stays LTR.
+//   RTL — force the whole window RTL (sidebar moves right, messages RTL), code LTR.
+//   LTR — baseline / off.
+// Inline per-element buttons (code block / input / preview card) remain available
+// in AUTO and RTL for manual per-block overrides.
 
 const RTL_CSS = `
   .claude-rtl-toggle-btn {
@@ -54,7 +66,7 @@ const RTL_CSS = `
     direction: ltr !important;
   }
 
-  /* Move sidebar to right side */
+  /* Move sidebar to right side (RTL mode only) */
   body[data-claude-rtl="true"] nav.fixed {
     left: auto !important;
     right: 0 !important;
@@ -64,21 +76,23 @@ const RTL_CSS = `
     border-left-color: inherit;
   }
 
-  /* Message content RTL via CSS cascade */
+  /* Message content RTL via CSS cascade (RTL mode) */
   body[data-claude-rtl="true"] .font-claude-response,
   body[data-claude-rtl="true"] [data-testid="user-message"] {
     direction: rtl;
     text-align: right;
   }
 
-  /* Code blocks default to LTR */
-  body[data-claude-rtl="true"] .code-block__code {
+  /* Code blocks default to LTR in any mode */
+  body[data-claude-rtl="true"] .code-block__code,
+  body[data-claude-rtl-mode="auto"] .code-block__code {
     direction: ltr !important;
     text-align: left !important;
   }
 
   /* Allow override when explicitly toggled to RTL */
-  body[data-claude-rtl="true"] .code-block__code[data-claude-dir="rtl"] {
+  body[data-claude-rtl="true"] .code-block__code[data-claude-dir="rtl"],
+  body[data-claude-rtl-mode="auto"] .code-block__code[data-claude-dir="rtl"] {
     direction: rtl !important;
     text-align: right !important;
   }
@@ -108,38 +122,52 @@ const RTL_CSS = `
     opacity: 1;
   }
 
-  /* Floating toggle button */
-  #claude-rtl-floating-toggle {
+  /* Floating AUTO / RTL / LTR control panel */
+  #claude-rtl-panel {
     position: fixed;
-    top: 12px;
-    right: 20px;
-    z-index: 99999;
-    background: rgba(0, 0, 0, 0.7);
-    color: white;
-    border: 1px solid rgba(255, 255, 255, 0.3);
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 2147483647;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 5px;
     border-radius: 8px;
-    padding: 8px 16px;
-    font-size: 13px;
-    font-weight: 700;
-    cursor: pointer;
-    font-family: system-ui, -apple-system, sans-serif;
-    transition: all 0.2s ease;
+    background: rgba(40, 40, 40, 0.92);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    direction: ltr;
     user-select: none;
+    -webkit-user-select: none;
   }
-
-  #claude-rtl-floating-toggle:hover {
-    background: rgba(0, 0, 0, 0.9);
-    transform: scale(1.05);
+  #claude-rtl-panel .ccr-grip {
+    cursor: move;
+    color: #aaa;
+    padding: 0 4px;
+    font-size: 12px;
+    line-height: 1;
+    touch-action: none;
   }
-
-  @media (prefers-color-scheme: dark) {
-    #claude-rtl-floating-toggle {
-      background: rgba(255, 255, 255, 0.15);
-      border-color: rgba(255, 255, 255, 0.25);
-    }
-    #claude-rtl-floating-toggle:hover {
-      background: rgba(255, 255, 255, 0.25);
-    }
+  #claude-rtl-panel .ccr-btn {
+    -webkit-appearance: none;
+    appearance: none;
+    border: 1px solid transparent;
+    background: transparent;
+    color: #ddd;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 5px;
+    cursor: pointer;
+    line-height: 1.4;
+  }
+  #claude-rtl-panel .ccr-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+  }
+  #claude-rtl-panel .ccr-btn[data-active] {
+    background: #2f6feb;
+    color: #fff;
   }
 `;
 
@@ -149,8 +177,95 @@ const RTL_JS = `(function() {
   if (window.claudeRTLInitialized) return;
   window.claudeRTLInitialized = true;
 
-  var STORAGE_KEY = 'claude-rtl-enabled';
+  var MODE_KEY = 'claude-rtl-mode';
+  var LEGACY_KEY = 'claude-rtl-enabled';
+  var PANEL_ID = 'claude-rtl-panel';
+  var LS_LEFT = 'claude-rtl-panel-left';
+  var LS_TOP = 'claude-rtl-panel-top';
 
+  function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  function lsSet(k, v) { try { localStorage.setItem(k, String(v)); } catch (e) {} }
+
+  // Initial mode: saved value, else migrate the legacy on/off flag, else AUTO.
+  var mode = (function() {
+    var m = lsGet(MODE_KEY);
+    if (m === 'auto' || m === 'rtl' || m === 'ltr') return m;
+    if (lsGet(LEGACY_KEY) === '1') return 'rtl';
+    return 'auto';
+  })();
+
+  // ---- AUTO: first-strong-character detection (per paragraph, locked once) ----
+  var RE_RTL = /[֑-߿‏יִ-﷽ﹰ-ﻼ]/;
+  var RE_LTR = /[A-Za-z‎]/;
+  var BLOCK_SEL = 'p,li,h1,h2,h3,h4,h5,h6,blockquote,td,th,dd,dt,summary,figcaption';
+  var RESPONSE_SEL = '.font-claude-response';
+  var USER_SEL = '[data-testid="user-message"]';
+  var SKIP_SEL = 'pre,code,.code-block__code,#' + PANEL_ID;
+
+  function firstStrongDir(text) {
+    var r = text.search(RE_RTL);
+    var l = text.search(RE_LTR);
+    if (r === -1 && l === -1) return null;
+    if (r === -1) return 'ltr';
+    if (l === -1) return 'rtl';
+    return r < l ? 'rtl' : 'ltr';
+  }
+
+  function decide(el) {
+    if (el.__ccrLocked) return;
+    if (el.closest && el.closest(SKIP_SEL)) { el.__ccrLocked = true; return; }
+    var dir = firstStrongDir(el.textContent || '');
+    if (!dir) return; // still neutral; re-check on a later tick
+    if (!el.getAttribute('dir')) {
+      el.setAttribute('dir', dir);
+      el.setAttribute('data-ccr', '');
+      el.style.textAlign = dir === 'rtl' ? 'right' : '';
+    }
+    el.__ccrLocked = true;
+  }
+
+  function pushHost(list, host) { if (host && list.indexOf(host) === -1) list.push(host); }
+
+  function decideWithin(root) {
+    if (!root || root.nodeType !== 1) return;
+    // Assistant responses: decide each block descendant.
+    var responses = [];
+    if (root.matches && root.matches(RESPONSE_SEL)) pushHost(responses, root);
+    if (root.closest) pushHost(responses, root.closest(RESPONSE_SEL));
+    if (root.querySelectorAll) {
+      var found = root.querySelectorAll(RESPONSE_SEL);
+      for (var f = 0; f < found.length; f++) pushHost(responses, found[f]);
+    }
+    for (var i = 0; i < responses.length; i++) {
+      var blocks = responses[i].querySelectorAll(BLOCK_SEL);
+      for (var j = 0; j < blocks.length; j++) decide(blocks[j]);
+    }
+    // User messages: single-direction container, decide whole.
+    var users = [];
+    if (root.matches && root.matches(USER_SEL)) pushHost(users, root);
+    if (root.closest) pushHost(users, root.closest(USER_SEL));
+    if (root.querySelectorAll) {
+      var uf = root.querySelectorAll(USER_SEL);
+      for (var u = 0; u < uf.length; u++) pushHost(users, uf[u]);
+    }
+    for (var k = 0; k < users.length; k++) decide(users[k]);
+  }
+
+  function autoSweep() { try { decideWithin(document.body); } catch (e) {} }
+
+  function clearAutoMarks() {
+    try {
+      var marked = document.querySelectorAll('[data-ccr]');
+      for (var i = 0; i < marked.length; i++) {
+        marked[i].removeAttribute('dir');
+        marked[i].removeAttribute('data-ccr');
+        marked[i].style.textAlign = '';
+        marked[i].__ccrLocked = false;
+      }
+    } catch (e) {}
+  }
+
+  // ---- inline per-element toggle buttons (kept from the original) ----
   function createToggleButton(isCodeBlock) {
     var button = document.createElement('span');
     button.className = 'claude-rtl-toggle-btn';
@@ -161,77 +276,68 @@ const RTL_JS = `(function() {
     return button;
   }
 
-  function toggleElementDirection(element, button, applyToChildren) {
+  function toggleElementDirection(element, button) {
     var currentDir = button.getAttribute('data-direction');
     var newDir = currentDir === 'rtl' ? 'ltr' : 'rtl';
-
     element.style.direction = newDir;
     element.setAttribute('data-claude-dir', newDir);
     element.style.textAlign = newDir === 'rtl' ? 'right' : 'left';
-
-    if (applyToChildren) {
-      var allChildren = element.querySelectorAll('*');
-      allChildren.forEach(function(child) {
-        child.style.direction = newDir;
-        if (newDir === 'rtl') {
-          child.style.textAlign = 'right';
-        } else {
-          var computedAlign = getComputedStyle(child).textAlign;
-          if (computedAlign === 'right' || computedAlign === 'start') {
-            child.style.textAlign = 'left';
-          }
-        }
-      });
-    }
-
     button.setAttribute('data-direction', newDir);
     button.textContent = newDir.toUpperCase();
+  }
+
+  function setFieldsetDir(fieldset, dir) {
+    var editor = fieldset.querySelector('.tiptap.ProseMirror')
+      || fieldset.querySelector('[contenteditable="true"]');
+    if (dir === 'auto') {
+      fieldset.setAttribute('dir', 'auto');
+      fieldset.style.direction = '';
+      fieldset.style.textAlign = '';
+      if (editor) { editor.setAttribute('dir', 'auto'); editor.style.direction = ''; editor.style.textAlign = ''; }
+    } else {
+      var ta = dir === 'rtl' ? 'right' : 'left';
+      fieldset.style.direction = dir;
+      fieldset.style.textAlign = ta;
+      if (editor) {
+        editor.style.direction = dir;
+        editor.style.textAlign = ta;
+        var overflowParent = editor.closest('.overflow-y-auto');
+        if (overflowParent && fieldset.contains(overflowParent)) {
+          overflowParent.style.direction = dir;
+          overflowParent.style.textAlign = ta;
+        }
+      }
+    }
   }
 
   function toggleFieldsetDirection(fieldset, button) {
-    var currentDir = button.getAttribute('data-direction');
-    var newDir = currentDir === 'rtl' ? 'ltr' : 'rtl';
-    var textAlign = newDir === 'rtl' ? 'right' : 'left';
-
-    fieldset.style.direction = newDir;
-    fieldset.style.textAlign = textAlign;
-
-    var editor = fieldset.querySelector('.tiptap.ProseMirror')
-      || fieldset.querySelector('[contenteditable="true"]');
-    if (editor) {
-      editor.style.direction = newDir;
-      editor.style.textAlign = textAlign;
-      var overflowParent = editor.closest('.overflow-y-auto');
-      if (overflowParent && fieldset.contains(overflowParent)) {
-        overflowParent.style.direction = newDir;
-        overflowParent.style.textAlign = textAlign;
-      }
-    }
-
+    var newDir = button.getAttribute('data-direction') === 'rtl' ? 'ltr' : 'rtl';
+    setFieldsetDir(fieldset, newDir);
     button.setAttribute('data-direction', newDir);
     button.textContent = newDir.toUpperCase();
   }
 
-  function togglePreviewCardDirection(card, button) {
-    var currentDir = button.getAttribute('data-direction');
-    var newDir = currentDir === 'rtl' ? 'ltr' : 'rtl';
-    var textAlign = newDir === 'rtl' ? 'right' : 'left';
-
-    card.style.direction = newDir;
-    card.style.textAlign = textAlign;
-
+  function setCardDir(card, dir) {
     var scrollArea = card.querySelector('.overflow-y-auto');
-    if (scrollArea) {
-      scrollArea.style.direction = newDir;
-      scrollArea.style.textAlign = textAlign;
-    }
-
     var textarea = card.querySelector('textarea');
-    if (textarea) {
-      textarea.style.direction = newDir;
-      textarea.style.textAlign = textAlign;
+    if (dir === 'auto') {
+      card.setAttribute('dir', 'auto');
+      card.style.direction = '';
+      card.style.textAlign = '';
+      if (scrollArea) { scrollArea.setAttribute('dir', 'auto'); scrollArea.style.direction = ''; scrollArea.style.textAlign = ''; }
+      if (textarea) { textarea.setAttribute('dir', 'auto'); textarea.style.direction = ''; textarea.style.textAlign = ''; }
+    } else {
+      var ta = dir === 'rtl' ? 'right' : 'left';
+      card.style.direction = dir;
+      card.style.textAlign = ta;
+      if (scrollArea) { scrollArea.style.direction = dir; scrollArea.style.textAlign = ta; }
+      if (textarea) { textarea.style.direction = dir; textarea.style.textAlign = ta; }
     }
+  }
 
+  function togglePreviewCardDirection(card, button) {
+    var newDir = button.getAttribute('data-direction') === 'rtl' ? 'ltr' : 'rtl';
+    setCardDir(card, newDir);
     button.setAttribute('data-direction', newDir);
     button.textContent = newDir.toUpperCase();
   }
@@ -245,49 +351,29 @@ const RTL_JS = `(function() {
       }
       codeBlock.style.direction = 'ltr';
       codeBlock.style.textAlign = 'left';
-
       var button = createToggleButton(true);
       button.addEventListener('click', function(e) {
         e.stopPropagation();
         toggleElementDirection(codeBlock, button);
       });
-
       if (codeBlock.parentElement) {
         codeBlock.parentElement.insertBefore(button, codeBlock);
       }
     });
   }
 
-  function processFieldsets() {
-    var fieldsets = document.querySelectorAll(
-      'fieldset.flex.w-full.min-w-0.flex-col'
-    );
+  function processFieldsets(initDir) {
+    var fieldsets = document.querySelectorAll('fieldset.flex.w-full.min-w-0.flex-col');
     fieldsets.forEach(function(fieldset) {
       if (fieldset.parentElement &&
           fieldset.parentElement.classList.contains('claude-fieldset-wrapper')) {
         return;
       }
-
-      fieldset.style.direction = 'rtl';
-      fieldset.style.textAlign = 'right';
-
-      var editor = fieldset.querySelector('.tiptap.ProseMirror')
-        || fieldset.querySelector('[contenteditable="true"]');
-      if (editor) {
-        editor.style.direction = 'rtl';
-        editor.style.textAlign = 'right';
-        var overflowParent = editor.closest('.overflow-y-auto');
-        if (overflowParent && fieldset.contains(overflowParent)) {
-          overflowParent.style.direction = 'rtl';
-          overflowParent.style.textAlign = 'right';
-        }
-      }
-
+      setFieldsetDir(fieldset, initDir);
       var wrapper = document.createElement('div');
       wrapper.className = 'claude-fieldset-wrapper';
       fieldset.parentNode.insertBefore(wrapper, fieldset);
       wrapper.appendChild(fieldset);
-
       var button = createToggleButton(false);
       button.addEventListener('click', function(e) {
         e.stopPropagation();
@@ -297,45 +383,18 @@ const RTL_JS = `(function() {
     });
   }
 
-  function processMessages() {
-    var selectors = '.font-claude-response, [data-testid="user-message"]';
-    var messages = document.querySelectorAll(selectors);
-    messages.forEach(function(message) {
-      if (message.getAttribute('data-claude-rtl-processed')) return;
-      message.style.direction = 'rtl';
-      message.style.textAlign = 'right';
-      message.setAttribute('data-claude-rtl-processed', 'true');
-    });
-  }
-
-  function processPreviewCards() {
+  function processPreviewCards(initDir) {
     var cards = document.querySelectorAll('.font-ui.rounded-2xl.border');
     cards.forEach(function(card) {
       if (card.parentElement &&
           card.parentElement.classList.contains('claude-preview-card-wrapper')) {
         return;
       }
-
-      card.style.direction = 'rtl';
-      card.style.textAlign = 'right';
-
-      var scrollArea = card.querySelector('.overflow-y-auto');
-      if (scrollArea) {
-        scrollArea.style.direction = 'rtl';
-        scrollArea.style.textAlign = 'right';
-      }
-
-      var textarea = card.querySelector('textarea');
-      if (textarea) {
-        textarea.style.direction = 'rtl';
-        textarea.style.textAlign = 'right';
-      }
-
+      setCardDir(card, initDir);
       var wrapper = document.createElement('div');
       wrapper.className = 'claude-preview-card-wrapper';
       card.parentNode.insertBefore(wrapper, card);
       wrapper.appendChild(card);
-
       var button = createToggleButton(false);
       button.addEventListener('click', function(e) {
         e.stopPropagation();
@@ -345,96 +404,219 @@ const RTL_JS = `(function() {
     });
   }
 
-  function processAllElements() {
-    processCodeBlocks();
-    processFieldsets();
-    processMessages();
-    processPreviewCards();
+  // Blanket message RTL (RTL mode only).
+  function processMessagesBlanket() {
+    var messages = document.querySelectorAll(RESPONSE_SEL + ', ' + USER_SEL);
+    messages.forEach(function(message) {
+      if (message.getAttribute('data-claude-rtl-processed')) return;
+      message.style.direction = 'rtl';
+      message.style.textAlign = 'right';
+      message.setAttribute('data-claude-rtl-processed', 'true');
+    });
   }
 
-  function setRTLEnabled(enabled) {
+  // Remove body-level state + AUTO/blanket marks (keeps inline wrappers/buttons).
+  function fullClear() {
     var body = document.body;
-    if (enabled) {
+    body.removeAttribute('data-claude-rtl');
+    body.style.direction = '';
+    clearAutoMarks();
+    var processed = document.querySelectorAll('[data-claude-rtl-processed]');
+    processed.forEach(function(el) {
+      el.style.direction = '';
+      el.style.textAlign = '';
+      el.removeAttribute('data-claude-rtl-processed');
+    });
+  }
+
+  function processForMode() {
+    if (mode === 'rtl') {
+      processCodeBlocks();
+      processFieldsets('rtl');
+      processMessagesBlanket();
+      processPreviewCards('rtl');
+    } else if (mode === 'auto') {
+      processCodeBlocks();
+      processFieldsets('auto');
+      autoSweep();
+      processPreviewCards('auto');
+    }
+  }
+
+  function applyMode(m) {
+    if (m !== 'auto' && m !== 'rtl' && m !== 'ltr') m = 'auto';
+    mode = m;
+    lsSet(MODE_KEY, m);
+    var body = document.body;
+    if (!body) return;
+    body.setAttribute('data-claude-rtl-mode', m);
+    fullClear();
+    if (m === 'rtl') {
       body.style.direction = 'rtl';
       body.setAttribute('data-claude-rtl', 'true');
-      processAllElements();
-    } else {
-      body.style.direction = '';
-      body.removeAttribute('data-claude-rtl');
-      var processed = document.querySelectorAll('[data-claude-rtl-processed]');
-      processed.forEach(function(el) {
-        el.style.direction = '';
-        el.style.textAlign = '';
-        el.removeAttribute('data-claude-rtl-processed');
-      });
     }
-    try { localStorage.setItem(STORAGE_KEY, enabled ? '1' : '0'); }
-    catch(e) { /* ignore */ }
-    updateFloatingButton(enabled);
+    processForMode();
+    updatePanelButtons();
   }
 
-  function toggleBodyDirection() {
-    var isRTL = document.body.getAttribute('data-claude-rtl') === 'true';
-    setRTLEnabled(!isRTL);
+  // Context-menu helpers (back-compat: claudeRTLToggle now cycles).
+  window.claudeRTLSetMode = function(m) { applyMode(m); };
+  window.claudeRTLToggle = function() {
+    var next = mode === 'auto' ? 'rtl' : (mode === 'rtl' ? 'ltr' : 'auto');
+    applyMode(next);
+  };
+
+  // ---- Floating AUTO / RTL / LTR panel ----
+  var btnAuto = null, btnRtl = null, btnLtr = null;
+
+  function setActive(btn, on) {
+    if (!btn) return;
+    if (on) btn.setAttribute('data-active', '1');
+    else btn.removeAttribute('data-active');
+  }
+  function updatePanelButtons() {
+    try {
+      setActive(btnAuto, mode === 'auto');
+      setActive(btnRtl, mode === 'rtl');
+      setActive(btnLtr, mode === 'ltr');
+    } catch (e) {}
   }
 
-  // Expose for context menu
-  window.claudeRTLToggle = toggleBodyDirection;
+  function makeBtn(m, label, title) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'ccr-btn';
+    b.textContent = label;
+    b.title = title;
+    b.setAttribute('data-mode', m);
+    b.addEventListener('click', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      applyMode(m);
+    });
+    return b;
+  }
 
-  // Floating toggle button
-  var floatingBtn = null;
-
-  function updateFloatingButton(isRTL) {
-    if (floatingBtn) {
-      floatingBtn.textContent = isRTL ? 'RTL' : 'LTR';
+  function enableDrag(panel, grip) {
+    var dragging = false, startX = 0, startY = 0, baseLeft = 0, baseTop = 0;
+    grip.addEventListener('pointerdown', function(e) {
+      dragging = true;
+      var rect = panel.getBoundingClientRect();
+      baseLeft = rect.left; baseTop = rect.top;
+      startX = e.clientX; startY = e.clientY;
+      panel.style.left = baseLeft + 'px';
+      panel.style.top = baseTop + 'px';
+      panel.style.right = 'auto';
+      panel.style.transform = 'none';
+      try { grip.setPointerCapture(e.pointerId); } catch (err) {}
+      e.preventDefault();
+    });
+    grip.addEventListener('pointermove', function(e) {
+      if (!dragging) return;
+      var nx = baseLeft + (e.clientX - startX);
+      var ny = baseTop + (e.clientY - startY);
+      nx = Math.max(0, Math.min(nx, window.innerWidth - panel.offsetWidth));
+      ny = Math.max(0, Math.min(ny, window.innerHeight - panel.offsetHeight));
+      panel.style.left = nx + 'px';
+      panel.style.top = ny + 'px';
+    });
+    function endDrag() {
+      if (!dragging) return;
+      dragging = false;
+      lsSet(LS_LEFT, parseInt(panel.style.left, 10) || 0);
+      lsSet(LS_TOP, parseInt(panel.style.top, 10) || 0);
     }
+    grip.addEventListener('pointerup', endDrag);
+    grip.addEventListener('pointercancel', endDrag);
   }
 
-  function createFloatingButton() {
-    floatingBtn = document.createElement('button');
-    floatingBtn.id = 'claude-rtl-floating-toggle';
-    floatingBtn.textContent = 'LTR';
-    floatingBtn.addEventListener('click', toggleBodyDirection);
-    document.body.appendChild(floatingBtn);
+  function ensurePanel() {
+    if (!document.body) return;
+    if (document.getElementById(PANEL_ID)) return;
+    var panel = document.createElement('div');
+    panel.id = PANEL_ID;
+    panel.setAttribute('dir', 'ltr');
+
+    var grip = document.createElement('span');
+    grip.className = 'ccr-grip';
+    grip.textContent = '⠿';
+    grip.title = 'Drag';
+    panel.appendChild(grip);
+
+    btnAuto = makeBtn('auto', 'AUTO', 'Automatic direction per paragraph');
+    btnRtl = makeBtn('rtl', 'RTL', 'Force right-to-left everywhere');
+    btnLtr = makeBtn('ltr', 'LTR', 'Force left-to-right everywhere');
+    panel.appendChild(btnAuto);
+    panel.appendChild(btnRtl);
+    panel.appendChild(btnLtr);
+
+    var left = lsGet(LS_LEFT), top = lsGet(LS_TOP);
+    if (left !== null && top !== null) {
+      panel.style.left = left + 'px';
+      panel.style.top = top + 'px';
+      panel.style.right = 'auto';
+      panel.style.transform = 'none';
+    }
+
+    document.body.appendChild(panel);
+    enableDrag(panel, grip);
+    updatePanelButtons();
   }
 
-  // MutationObserver with debounce
+  // ---- streaming / SPA observer (batched per frame) ----
   function startObserver() {
-    var timeout;
+    var scheduled = false;
+    var pending = [];
+    function flush() {
+      scheduled = false;
+      var batch = pending;
+      pending = [];
+      try {
+        if (mode === 'auto') {
+          for (var n = 0; n < batch.length; n++) decideWithin(batch[n]);
+          processCodeBlocks();
+          processFieldsets('auto');
+          processPreviewCards('auto');
+        } else if (mode === 'rtl') {
+          processCodeBlocks();
+          processFieldsets('rtl');
+          processMessagesBlanket();
+          processPreviewCards('rtl');
+        }
+        ensurePanel();
+      } catch (e) {}
+    }
+    var schedule = window.requestAnimationFrame
+      ? function() { window.requestAnimationFrame(flush); }
+      : function() { setTimeout(flush, 0); };
     var observer = new MutationObserver(function(mutations) {
-      var shouldProcess = false;
+      if (mode === 'ltr') return;
       for (var i = 0; i < mutations.length; i++) {
-        if (mutations[i].addedNodes.length > 0) {
-          shouldProcess = true;
-          break;
+        var mu = mutations[i];
+        if (mu.type === 'characterData') {
+          if (mu.target.parentElement) pending.push(mu.target.parentElement);
+          continue;
+        }
+        var added = mu.addedNodes;
+        for (var k = 0; k < added.length; k++) {
+          if (added[k].nodeType === 1) pending.push(added[k]);
         }
       }
-      if (shouldProcess && document.body.getAttribute('data-claude-rtl') === 'true') {
-        clearTimeout(timeout);
-        timeout = setTimeout(processAllElements, 100);
-      }
+      if (!scheduled) { scheduled = true; schedule(); }
     });
-
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true
-    });
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
   }
 
-  // Initialize
-  createFloatingButton();
-
-  var savedState = false;
-  try { savedState = localStorage.getItem(STORAGE_KEY) === '1'; }
-  catch(e) { /* ignore */ }
-
-  if (savedState) {
-    setRTLEnabled(true);
+  function start() {
+    ensurePanel();
+    applyMode(mode);
+    startObserver();
   }
 
-  startObserver();
+  if (document.body) start();
+  else document.addEventListener('DOMContentLoaded', start);
 })();`;
 
-const RTL_CONTEXT_MENU_LABEL = 'Switch language direction';
+const RTL_CONTEXT_MENU_LABEL = 'Switch language direction (AUTO/RTL/LTR)';
 
 module.exports = { RTL_CSS, RTL_JS, RTL_CONTEXT_MENU_LABEL };
