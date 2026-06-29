@@ -287,6 +287,7 @@ install_patch() {
 	local node_dir; node_dir=$(dirname "$(command -v node)")
 	write_state "$asar" "$patched_sha" "$ver" "$node_dir"
 	save_stable_bundle "$src_dir"
+	save_shortcut
 
 	if [[ $NO_AUTO_UPDATE -eq 1 ]]; then
 		log 'Auto-re-patch skipped (--no-auto-update). Re-run after a Claude update, or use --enable-auto-update.'
@@ -329,6 +330,61 @@ save_stable_bundle() {
 		as_root cp "$src/$f" "$dst/$f"
 	done
 	ok "Stable copy saved ($dst)"
+}
+
+# --- re-patch desktop shortcut ----------------------------------------------
+# A user-clickable shortcut that re-applies the patch after a Claude Desktop
+# update. The stable patcher needs sudo for /usr/lib writes, so the .desktop runs
+# in a terminal (Terminal=true) where the patcher's own `sudo` can prompt — NOT
+# pkexec (that would run the whole script as root and lose npx/Node on PATH).
+# User-space only, so it is skipped when this run is root (e.g. the systemd
+# watcher); the shortcut from the first interactive install persists.
+SHORTCUT_NAME='claude-linux-rtl-repatch.desktop'
+
+desktop_dir() {
+	local d
+	d=$(xdg-user-dir DESKTOP 2>/dev/null)
+	if [[ -n "$d" && -d "$d" ]]; then printf '%s' "$d"; return; fi
+	printf '%s' "$HOME/Desktop"
+}
+
+save_shortcut() {
+	[[ $EUID -eq 0 ]] && return 0  # no user home when run as root (watcher)
+	local data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/claude-linux-rtl"
+	local launcher="$data_dir/repatch.sh"
+	mkdir -p "$data_dir" || return 0
+	cat > "$launcher" <<-SH
+		#!/usr/bin/env bash
+		# Re-apply the Claude Desktop Hebrew RTL patch (after a Claude update).
+		"$STATE_DIR/app/patch-claude-linux.sh" --yes --no-auto-update
+		echo
+		read -rp 'Press Enter to close...'
+	SH
+	chmod +x "$launcher"
+
+	local desk; desk=$(desktop_dir)
+	mkdir -p "$desk" || return 0
+	local dfile="$desk/$SHORTCUT_NAME"
+	cat > "$dfile" <<-DESK
+		[Desktop Entry]
+		Type=Application
+		Name=Re-apply Claude RTL
+		Comment=Re-apply the Hebrew RTL patch after Claude Desktop updates
+		Exec=$launcher
+		Terminal=true
+		Icon=claude-desktop
+		Categories=Utility;
+	DESK
+	chmod +x "$dfile"
+	# KDE/GNOME: mark trusted so it launches from the desktop without a warning.
+	gio set "$dfile" metadata::trusted true 2>/dev/null || true
+	ok "Re-patch shortcut created ($dfile)"
+}
+
+remove_shortcut() {
+	[[ $EUID -eq 0 ]] && return 0
+	rm -f "$(desktop_dir)/$SHORTCUT_NAME" 2>/dev/null || true
+	rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/claude-linux-rtl/repatch.sh" 2>/dev/null || true
 }
 
 # =============================================================================
@@ -505,8 +561,9 @@ restore_patch() {
 		warn 'No app.asar.bak found — nothing to restore.'
 	fi
 	restore_launcher
-	# An explicit restore means "stop" — turn the watcher off too.
+	# An explicit restore means "stop" — turn the watcher off + drop the shortcut.
 	disable_auto_update
+	remove_shortcut
 
 	if [[ $EUID -ne 0 && -x /usr/bin/claude-desktop ]]; then
 		setsid /usr/bin/claude-desktop >/dev/null 2>&1 < /dev/null &

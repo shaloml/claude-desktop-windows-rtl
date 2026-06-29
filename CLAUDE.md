@@ -94,6 +94,25 @@ Read this before making non-trivial changes.
 - **Shared (all three):** `rtl-support.js`, `translate-support.js`,
   `multi-instance-support.js`, and the in-process "new window" approach. Fix a
   platform quirk in the platform `*-wrapper.js`, never in the shared modules.
+- **RTL is a 3-mode floating panel** (`rtl-support.js`, claude.ai DOM): a draggable
+  `#claude-rtl-panel` (top-center; mode + position in `localStorage` key
+  `claude-rtl-mode`, default **AUTO**) with **AUTO / RTL / LTR**. AUTO does
+  per-paragraph first-strong-char detection **locked once** (no streaming flicker)
+  on `.font-claude-response` blocks + whole `[data-testid="user-message"]`, code
+  stays LTR; **RTL** is the old blanket `body[data-claude-rtl="true"]` cascade
+  (sidebar→right); **LTR** is off. The old single `#claude-rtl-floating-toggle` was
+  removed; the inline per-element buttons (code/input/preview) were kept.
+  `window.claudeRTLToggle` now **cycles** modes (back-compat for the wrappers' menu);
+  `window.claudeRTLSetMode(m)` is also exposed. Per-platform wrappers only repoint
+  their button-offset CSS to `#claude-rtl-panel`. Lineage: the
+  [`shaloml/rtl-chatgpt`](https://github.com/shaloml/rtl-chatgpt) browser extension
+  (Chrome/Edge "Claude.ai RTL Transformer").
+- **Re-patch Desktop shortcut:** each patcher's Install drops a user-clickable
+  "Re-apply Claude RTL" shortcut on the **Desktop** (Windows `.lnk` via WScript.Shell;
+  macOS `.command`; Linux `.desktop` with `Terminal=true` so the patcher's own `sudo`
+  can prompt — NOT `pkexec`), running the stable-copy patcher non-interactively.
+  Created only on an interactive (non-root) run so the systemd watcher doesn't make
+  one in `/root`; Restore removes it. It complements (doesn't replace) the watchers.
 
 ## Commit & attribution policy
 
