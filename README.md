@@ -29,10 +29,30 @@ powershell -ExecutionPolicy Bypass -File .\patch-claude-windows.ps1
 > **Linux** is the simplest target (no integrity hash, no code-signing) — see
 > the [Linux](#linux) section.
 
+## Related projects — Hebrew RTL for Claude everywhere
+
+The same Hebrew/Arabic RTL treatment is available on every Claude surface:
+
+- **Claude Desktop** (Windows / macOS / Linux) — *this repo*.
+- **Claude Code in VS Code** — [`vscode-claude-rtl`](https://github.com/shaloml/vscode-claude-rtl)
+  (installable extension + standalone patchers).
+- **Browser (Chrome / Edge)** — *Claude.ai RTL Transformer*, for claude.ai in the browser:
+  - Source: [`shaloml/rtl-chatgpt`](https://github.com/shaloml/rtl-chatgpt)
+  - [Chrome Web Store](https://chromewebstore.google.com/detail/claude-ai-rtl-transformer/pcnpnpaipomdildpaehlnmlbiiaagdid)
+  - [Edge Add-ons](https://microsoftedge.microsoft.com/addons/detail/claude-ai-rtl-transformer/mcbkppnfkonepcpndghjbdlhipmmhipn)
+
 ## Features
 
-- **RTL support** — automatic right-to-left layout for Hebrew/Arabic, a floating
-  LTR/RTL toggle, and an on/off item in the right-click menu (no page reload).
+- **RTL support** — a floating, draggable **AUTO / RTL / LTR** panel at the top
+  (mode + position remembered). **AUTO** (default) sets each message paragraph's
+  direction automatically (Hebrew → RTL; English & code → LTR; no flicker while
+  streaming); **RTL** forces the whole window right-to-left (sidebar moves right),
+  code stays LTR; **LTR** is the baseline. Inline per-block LTR↔RTL buttons remain
+  on code / input / preview cards, plus a cycle item in the right-click menu.
+- **Re-patch shortcut** — the first install drops a **"Re-apply Claude RTL"**
+  shortcut on your Desktop; click it to re-apply after a Claude Desktop update
+  (Windows / KDE & other Linux / macOS). The auto-update watcher still does this
+  automatically too.
 - **Translate to Hebrew** — one-shot page translation from the right-click menu.
 - **New window** — opens another window in the same process, already logged in
   (shares the session — no second login).
