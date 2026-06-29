@@ -2,11 +2,10 @@
 .SYNOPSIS
     Assemble a self-contained, distributable ZIP of the Windows extensions patch.
 .DESCRIPTION
-    Collects the Desktop (MSIX) patcher plus its JS payloads, AND the Claude Code
-    VS Code patcher with its two payloads (all from .\src\), into a single flat
-    folder and zips it. Each patcher detects this flat "bundle" layout, so the ZIP
-    is fully self-contained — the target machine needs only Node.js and either the
-    MSIX Claude Desktop or the Claude Code VS Code extension, no repo checkout.
+    Collects the patcher plus its five JS payload files (from .\src\) into a
+    single flat folder and zips it. The patcher's Resolve-SourceFiles detects
+    this flat "bundle" layout, so the ZIP is fully self-contained — the target
+    machine needs only Node.js and the MSIX Claude Desktop, no repo checkout.
 
     Output (under .\dist\ by default):
         claude-desktop-windows-rtl[-vX.Y.Z]\     the unpacked bundle
@@ -45,18 +44,14 @@ $bundleName = "$projectName$verSuffix"
 $bundleDir = Join-Path $OutDir $bundleName
 $zipPath = Join-Path $OutDir "$bundleName.zip"
 
-# (file name, source dir) — patchers at root, the JS/CSS payloads in src\.
+# (file name, source dir) — patcher at root, the five JS payloads in src\.
 $payload = @(
 	@{ Name = 'patch-claude-windows.ps1';   Dir = $scriptDir },
 	@{ Name = 'win-entry.js';               Dir = $srcDir },
 	@{ Name = 'win-wrapper.js';             Dir = $srcDir },
 	@{ Name = 'rtl-support.js';             Dir = $srcDir },
 	@{ Name = 'translate-support.js';       Dir = $srcDir },
-	@{ Name = 'multi-instance-support.js';  Dir = $srcDir },
-	# Also ship the Claude Code VS Code auto-RTL patcher (runs on Windows too).
-	@{ Name = 'patch-claude-code-vscode.ps1'; Dir = $scriptDir },
-	@{ Name = 'vscode-rtl-inject.js';         Dir = $srcDir },
-	@{ Name = 'vscode-rtl-inject.css';        Dir = $srcDir }
+	@{ Name = 'multi-instance-support.js';  Dir = $srcDir }
 )
 
 foreach ($p in $payload) {
@@ -99,18 +94,10 @@ INSTALL
 Unattended (auto-approve all prompts):
    powershell -ExecutionPolicy Bypass -File .\patch-claude-windows.ps1 -Yes
 
-BONUS: CLAUDE CODE IN VS CODE (RTL panel)
------------------------------------------
-This bundle also ships patch-claude-code-vscode.ps1, which adds a floating,
-draggable AUTO / RTL / LTR direction panel to the Claude Code VS Code extension's
-sidebar chat. AUTO flips each paragraph on its own; RTL/LTR force one direction
-across the whole webview (code stays LTR). It needs NO administrator rights (the
-webview files are yours) and stays applied across extension updates via a
-Scheduled Task.
-   Double-click "Run-VSCode-RTL.cmd"
-   (or:  powershell -ExecutionPolicy Bypass -File .\patch-claude-code-vscode.ps1 )
-   Revert:  powershell -ExecutionPolicy Bypass -File .\patch-claude-code-vscode.ps1 -Action Restore
-Then reload the webview: VS Code -> "Developer: Reload Window".
+CLAUDE CODE IN VS CODE (RTL)
+----------------------------
+RTL for the Claude Code VS Code extension now lives in its own project:
+   https://github.com/shaloml/vscode-claude-rtl
 
 STAYING PATCHED ACROSS UPDATES
 ------------------------------
@@ -144,15 +131,6 @@ REM or just double-click and approve the UAC prompt.
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','%~dp0patch-claude-windows.ps1'"
 '@
 Set-Content (Join-Path $bundleDir 'Run-Patch.cmd') -Value $cmd -Encoding ascii
-
-# The VS Code extension patcher needs no elevation — run it in place.
-$vscodeCmd = @'
-@echo off
-REM Patches the Claude Code VS Code extension for the RTL panel. No admin needed.
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0patch-claude-code-vscode.ps1"
-pause
-'@
-Set-Content (Join-Path $bundleDir 'Run-VSCode-RTL.cmd') -Value $vscodeCmd -Encoding ascii
 
 if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
 Compress-Archive -Path (Join-Path $bundleDir '*') -DestinationPath $zipPath -Force

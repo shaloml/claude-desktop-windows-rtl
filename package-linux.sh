@@ -40,10 +40,6 @@ files=(
 	"rtl-support.js:$src_dir"
 	"translate-support.js:$src_dir"
 	"multi-instance-support.js:$src_dir"
-	# Also ship the Claude Code VS Code auto-RTL patcher (runs on Linux too).
-	"patch-claude-code-vscode.sh:$script_dir"
-	"vscode-rtl-inject.js:$src_dir"
-	"vscode-rtl-inject.css:$src_dir"
 )
 
 for entry in "${files[@]}"; do
@@ -52,11 +48,9 @@ for entry in "${files[@]}"; do
 done
 
 # Parse/syntax sanity before bundling.
-for sh in patch-claude-linux.sh patch-claude-code-vscode.sh; do
-	bash -n "$script_dir/$sh" || { echo "$sh failed to parse" >&2; exit 1; }
-done
+bash -n "$script_dir/patch-claude-linux.sh" || { echo "patch-claude-linux.sh failed to parse" >&2; exit 1; }
 for js in linux-entry.js linux-wrapper.js rtl-support.js translate-support.js \
-		multi-instance-support.js vscode-rtl-inject.js; do
+		multi-instance-support.js; do
 	node --check "$src_dir/$js" || { echo "$js failed node --check" >&2; exit 1; }
 done
 
@@ -66,7 +60,7 @@ for entry in "${files[@]}"; do
 	name="${entry%%:*}"; dir="${entry##*:}"
 	cp "$dir/$name" "$bundle_dir/$name"
 done
-chmod +x "$bundle_dir/patch-claude-linux.sh" "$bundle_dir/patch-claude-code-vscode.sh"
+chmod +x "$bundle_dir/patch-claude-linux.sh"
 
 cat > "$bundle_dir/INSTALL.txt" <<'TXT'
 Claude Desktop — Linux extensions patch
@@ -97,15 +91,10 @@ UNINSTALL / RESTORE ORIGINAL
 ----------------------------
    ./patch-claude-linux.sh --restore
 
-BONUS: CLAUDE CODE IN VS CODE (auto-RTL)
-----------------------------------------
-This bundle also ships patch-claude-code-vscode.sh, which adds automatic Hebrew
-RTL to the Claude Code VS Code extension's sidebar chat. It needs no sudo (the
-webview files are yours) and stays applied across extension updates via a
-systemd --user timer.
-   ./patch-claude-code-vscode.sh            # install
-   ./patch-claude-code-vscode.sh --restore  # revert
-Then reload the webview: VS Code -> "Developer: Reload Window".
+CLAUDE CODE IN VS CODE (RTL)
+----------------------------
+RTL for the Claude Code VS Code extension now lives in its own project:
+   https://github.com/shaloml/vscode-claude-rtl
 
 STAYING PATCHED ACROSS UPDATES
 ------------------------------

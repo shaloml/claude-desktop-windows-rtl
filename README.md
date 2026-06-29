@@ -5,9 +5,9 @@ extensions to the **official Claude Desktop** — no repackaged installer, no
 rebuild. The same JavaScript extensions run on all three platforms; each OS has
 its own patcher.
 
-> Also here: a separate, lightweight patcher that adds **automatic Hebrew RTL to
-> the Claude Code VS Code extension** — see
-> [Claude Code in VS Code](#claude-code-in-vs-code-auto-rtl).
+> Looking for **RTL in the Claude Code VS Code extension** (the sidebar chat)?
+> That moved to its own project, developed and released separately:
+> **[vscode-claude-rtl](https://github.com/shaloml/vscode-claude-rtl)**.
 
 ```powershell
 # Windows (run elevated, from an unzipped release or this repo root):
@@ -192,47 +192,19 @@ resources. (These launcher scripts are root-owned and live outside the asar, so
 the patch backs them up and re-applies via the auto-update watcher after a
 Claude update.) **Translate to Hebrew** is best-effort here as well.
 
-## Claude Code in VS Code (auto-RTL)
+## Claude Code in VS Code (moved out)
 
-A separate, much lighter patcher adds **automatic Hebrew RTL** to the **Claude
-Code VS Code extension** (the sidebar chat). Its UI is a plain webview
-(`<ext>/webview/index.js` + `index.css`) — no asar, no integrity hash, no
-code-signing, and the files are owned by you — so the patcher just appends two
-payloads (`src/vscode-rtl-inject.js` / `.css`) between sentinel comments and
-restores from `*.bak` before every re-patch. **No Administrator / sudo needed.**
+RTL for the **Claude Code VS Code extension** (the sidebar chat) used to live
+here. It has since grown its own focus and is now **developed and released
+separately**, in its own repository:
 
-```bash
-# macOS (verified) & Linux — the same script:
-./patch-claude-code-vscode.sh                  # install (prompts first)
-./patch-claude-code-vscode.sh --restore        # revert
-./patch-claude-code-vscode.sh --no-auto-update # skip the re-patch watcher
-```
+➡️ **[github.com/shaloml/vscode-claude-rtl](https://github.com/shaloml/vscode-claude-rtl)**
 
-```powershell
-# Windows (verified):
-powershell -ExecutionPolicy Bypass -File .\patch-claude-code-vscode.ps1
-powershell -ExecutionPolicy Bypass -File .\patch-claude-code-vscode.ps1 -Action Restore
-```
-
-After any (re)patch, reload the webview once: VS Code command palette →
-**"Developer: Reload Window"** (or restart VS Code).
-
-**How the RTL works:** rather than `dir="auto"` (which the browser re-evaluates
-live, so paragraphs flicker left/right while a response streams), the injected JS
-decides each text block's direction from its first strong character and pins
-`dir="rtl"`/`"ltr"` **stickily** — once decided, a paragraph never flips again.
-Hebrew settles RTL on its first Hebrew glyph; English and code stay LTR. It needs
-no knowledge of the webview's hashed class names, so it survives extension updates.
-
-**Stays applied across updates:** the extension auto-updates into a fresh,
-versioned folder that wipes the patch, so a launchd LaunchAgent (macOS) /
-systemd `--user` timer (Linux) / Scheduled Task (Windows) re-applies it
-automatically — on by default (`--no-auto-update` / `-NoAutoUpdate` to skip).
-You still reload the window once after an automatic re-patch.
-
-> The Linux Claude Desktop release tarball (from `package-linux.sh`) bundles
-> this VS Code patcher too, so one download covers both the desktop app and the
-> Claude Code sidebar.
+That project offers a proper installable VS Code extension — with a floating,
+draggable **AUTO / RTL / LTR** panel — plus standalone `install/*.{sh,ps1}`
+patchers for using it without the extension, and ready-to-install `.vsix`
+downloads under its Releases. This repository is now strictly the **Claude
+Desktop** (Windows / macOS / Linux) patcher.
 
 ## Repository layout
 
@@ -243,8 +215,6 @@ patch-claude-macos.sh        macOS patcher (install / --restore / auto-update)
 package-macos.sh             builds the macOS tar.gz under dist/
 patch-claude-linux.sh        Linux patcher (install / --restore / auto-update)
 package-linux.sh             builds the Linux tar.gz under dist/
-patch-claude-code-vscode.sh  Claude Code VS Code auto-RTL patcher (macOS)
-patch-claude-code-vscode.ps1 Claude Code VS Code auto-RTL patcher (Windows)
 src/
   win-entry.js / win-wrapper.js     Windows entry + web-contents hook
   mac-entry.js / mac-wrapper.js     macOS entry + web-contents hook
@@ -252,7 +222,6 @@ src/
   rtl-support.js             RTL CSS/JS (shared, origin: claude-desktop-linux)
   translate-support.js       translate-to-Hebrew (main-process; shared)
   multi-instance-support.js  floating "new window" button (shared)
-  vscode-rtl-inject.js / .css  auto-RTL webview payloads (Claude Code VS Code)
 ```
 
 ## Building a release archive
